@@ -1,0 +1,28 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc = "0.8.26"
+evm_version = "cancun"
+optimizer = true
+# Required to compile v4-core's PoolManager inside test units (Yul stack-too-deep at low runs).
+optimizer_runs = 44444444
+via_ir = true
+ffi = false
+# Each top-level test call is its own transaction, so EIP-1153 transient storage clears between calls.
+isolate = true
+fs_permissions = [{ access = "read", path = "./" }, { access = "read-write", path = "./deployments" }]
+# No metadata hash in the bytecode: builds are reproducible regardless of local source paths.
+bytecode_hash = "none"
+cbor_metadata = false
+
+[profile.default.fuzz]
+runs = 256
+
+[profile.default.invariant]
+runs = 128
+depth = 48
+fail_on_revert = true
+
+[rpc_endpoints]
+robinhood = "${ROBINHOOD_RPC_URL}"

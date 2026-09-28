@@ -1,0 +1,588 @@
+<p align="center">
+  <img src=".github/assets/fathom-logo.png" width="96" height="96" alt="Fathom">
+</p>
+
+<h1 align="center">Fathom contracts</h1>
+
+<p align="center">
+  The liquidity layer for Robinhood Chain.<br>
+  <a href="https://fathompools.xyz">fathompools.xyz</a> ·
+  <a href="https://x.com/FathomPools">@FathomPools</a> ·
+  <a href="https://robinhoodchain.blockscout.com">Robinhood Chain explorer</a>
+</p>
+
+---
+
+This repository holds the smart contracts behind [Fathom](https://fathompools.xyz), exactly as they
+are deployed on **Robinhood Chain mainnet** (chain id 4663), with an explanation of what each one does.
+
+Fathom gives Robinhood Chain three kinds of liquidity pools and one router across all of them:
+
+- **DAMM pools**: permissionless Uniswap v4 pools whose fee moves with volatility (Meteora DAMM v2
+  style), with an optional anti-snipe fee at launch.
+- **Stock pools**: Uniswap v4 pools for tokenized stocks, guarded by Chainlink. The pool price has
+  to stay inside a band around the oracle price, and the fee follows the US market session.
+- **DLMM pairs**: a discrete-bin, concentrated-liquidity AMM in the Liquidity Book design, with
+  bin-range positions held as NFTs.
+- **Router**: one exact-input, multi-hop router across all three venues, any other Uniswap v4 pool
+  and Pons bonding curves.
+
+A share of every swap fee goes to the protocol. It is converted to ETH and used to buy back and
+burn the **$FATHOM** token.
+
+> [!NOTE]
+> The contracts are immutable: no proxies, no upgrades. The owner key cannot touch anyone's
+> liquidity, and removing liquidity is never paused. See [Admin powers](#admin-powers) and
+> [SECURITY.md](SECURITY.md).
+
+## Contents
+
+- [Deployed contracts](#deployed-contracts)
+- [How it fits together](#how-it-fits-together)
+- [The contracts](#the-contracts)
+  - [ProtocolConfig](#protocolconfig)
+  - [AssetRegistry](#assetregistry)
+  - [FathomHookBase](#fathomhookbase)
+  - [DammHook](#dammhook)
+  - [StockHook](#stockhook)
+  - [HookDeployer](#hookdeployer)
+  - [DlmmFactory](#dlmmfactory)
+  - [DlmmPair](#dlmmpair)
+  - [DlmmPositionNFT](#dlmmpositionnft)
+  - [Router and PonsAdapter](#router-and-ponsadapter)
+  - [FeeCollector](#feecollector)
+  - [Buyback](#buyback)
+- [Fees](#fees)
+- [Admin powers](#admin-powers)
+- [Safety guards](#safety-guards)
+- [Verification](#verification)
+- [Building and testing](#building-and-testing)
+- [Repository layout](#repository-layout)
+- [License](#license)
+
+## Deployed contracts
+
+Robinhood Chain mainnet, chain id 4663, deployed from block 72 268 876. The same addresses are in
+[`deployments/robinhood.json`](deployments/robinhood.json). Every contract's source is verified on
+[Sourcify](https://sourcify.dev), and the source in this repository is byte-identical to the verified
+source (see [Verification](#verification)).
+
+| Contract | Address (Blockscout) | Verified source (Sourcify) | Role |
+|---|---|---|---|
+| ProtocolConfig | [`0xf5c7A7F883d64fa0041FBEB4459E756670bf50a7`](https://robinhoodchain.blockscout.com/address/0xf5c7A7F883d64fa0041FBEB4459E756670bf50a7?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0xf5c7A7F883d64fa0041FBEB4459E756670bf50a7) | Owner, pause switch, protocol fee share |
+| AssetRegistry | [`0xA2cCfA083823A24D10987dD985f72978da614ea9`](https://robinhoodchain.blockscout.com/address/0xA2cCfA083823A24D10987dD985f72978da614ea9?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0xA2cCfA083823A24D10987dD985f72978da614ea9) | Stock tokens, Chainlink feeds, risk parameters, market hours |
+| DammHook | [`0x13dEa09a13fDF2C32E6CFe0b5A50C4C47AA1a8cC`](https://robinhoodchain.blockscout.com/address/0x13dEa09a13fDF2C32E6CFe0b5A50C4C47AA1a8cC?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x13dEa09a13fDF2C32E6CFe0b5A50C4C47AA1a8cC) | Uniswap v4 hook: dynamic-fee DAMM pools |
+| StockHook | [`0xa8122E55fbcb3F81cdC5418aeBd77351C0e568cC`](https://robinhoodchain.blockscout.com/address/0xa8122E55fbcb3F81cdC5418aeBd77351C0e568cC?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0xa8122E55fbcb3F81cdC5418aeBd77351C0e568cC) | Uniswap v4 hook: oracle-guarded stock pools |
+| DlmmFactory | [`0x4B104E75B478B28492873e5Fb2BB0190166d296F`](https://robinhoodchain.blockscout.com/address/0x4B104E75B478B28492873e5Fb2BB0190166d296F?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x4B104E75B478B28492873e5Fb2BB0190166d296F) | Creates DLMM pairs |
+| DlmmPositionNFT | [`0x916617697B1D782Ac59EE76378E86f7c2Ed3970D`](https://robinhoodchain.blockscout.com/address/0x916617697B1D782Ac59EE76378E86f7c2Ed3970D?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x916617697B1D782Ac59EE76378E86f7c2Ed3970D) | ERC-721 DLMM positions (`FTHM-DLMM`) |
+| Router | [`0x2303cC5a9CCdDBA50daf04aeece372Fd99813F8B`](https://robinhoodchain.blockscout.com/address/0x2303cC5a9CCdDBA50daf04aeece372Fd99813F8B?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x2303cC5a9CCdDBA50daf04aeece372Fd99813F8B) | Multi-hop swaps across every venue |
+| FeeCollector | [`0x51F34Ca37DD144a7709ee81c21AC7e850BC3A453`](https://robinhoodchain.blockscout.com/address/0x51F34Ca37DD144a7709ee81c21AC7e850BC3A453?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x51F34Ca37DD144a7709ee81c21AC7e850BC3A453) | Receives protocol fees, converts them to ETH |
+| Buyback | [`0x8b3d718843fd9167a52BDed64554131e39b4042F`](https://robinhoodchain.blockscout.com/address/0x8b3d718843fd9167a52BDed64554131e39b4042F?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x8b3d718843fd9167a52BDed64554131e39b4042F) | Buys $FATHOM with ETH and burns it |
+
+Owner of every owned contract (`ProtocolConfig`, `AssetRegistry`, `FeeCollector`, `Buyback`):
+[`0x29A99360467CEB0D726450A09337b19A9D2ac5b7`](https://robinhoodchain.blockscout.com/address/0x29A99360467CEB0D726450A09337b19A9D2ac5b7), the deployer.
+Ownership uses `Ownable2Step`, so a transfer only completes when the new owner accepts it.
+
+### Launch pools
+
+Created by [`script/Seed.s.sol`](script/Seed.s.sol) right after deployment. All v4 pools use the
+dynamic-fee flag (`0x800000`) and tick spacing 60; pool ids are `keccak256(abi.encode(PoolKey))`.
+
+| Pool | Venue | Pool id / address |
+|---|---|---|
+| ETH / USDG | DAMM (base fee 30 bps, no snipe window, `variableFeeControl` 10 000) | `0x94cf7adb013cec4701270d81f271680cc02c40590c107e2c5a7f0950f9a59c94` |
+| NVDA / USDG | Stock | `0x30e20529f6e096429a9abbe8b1be28ea1483852e8e1f383705c15ef58fab153a` |
+| MSFT / USDG | Stock | `0x8b9685b67b9ab38b32291f898b5f0d729cefda265ea8b8912400529ecccbb5b6` |
+| AAPL / USDG | Stock | `0xc179485724d1a6d8371f13db06e0d469e18c5a6d4c9e542215bb983faea2a10e` |
+| GOOGL / USDG | Stock | `0xfde4ed416f71ed97c286aec5f65b4a3124c90eac0f48ae22a30fffc05af09980` |
+| AMZN / USDG | Stock | `0xb7eeed417e71e459aee0fb30ccbdd0d469c99cfb8e7bf7f7134375a4cfc088e8` |
+| WETH / USDG | DLMM pair, bin step 10 | [`0xFded0De76C38B1d94dc1910A4BD4e221c98e4923`](https://robinhoodchain.blockscout.com/address/0xFded0De76C38B1d94dc1910A4BD4e221c98e4923?tab=contract) ([Sourcify](https://repo.sourcify.dev/4663/0xFded0De76C38B1d94dc1910A4BD4e221c98e4923)) |
+
+Anyone can create more DAMM pools and DLMM pairs, and more stock pools for any registered stock.
+
+### External contracts
+
+Canonical Robinhood Chain contracts Fathom talks to. All of them, plus the 35 stock tokens and their
+Chainlink feeds, are in [`script/RobinhoodAddresses.sol`](script/RobinhoodAddresses.sol).
+
+| Contract | Address |
+|---|---|
+| Uniswap v4 PoolManager | [`0x8366a39CC670B4001A1121B8F6A443A643e40951`](https://robinhoodchain.blockscout.com/address/0x8366a39CC670B4001A1121B8F6A443A643e40951) |
+| Uniswap v4 PositionManager (LP NFTs for DAMM and stock pools) | [`0x58daec3116aae6D93017bAAea7749052E8a04fA7`](https://robinhoodchain.blockscout.com/address/0x58daec3116aae6D93017bAAea7749052E8a04fA7) |
+| WETH | [`0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73`](https://robinhoodchain.blockscout.com/address/0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73) |
+| USDG (6 decimals) | [`0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168`](https://robinhoodchain.blockscout.com/address/0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168) |
+| Chainlink ETH / USD | [`0x78F3556b67E17Df817D51Ef5a990cDaF09E8d3A9`](https://robinhoodchain.blockscout.com/address/0x78F3556b67E17Df817D51Ef5a990cDaF09E8d3A9) |
+| Pons factory | [`0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e`](https://robinhoodchain.blockscout.com/address/0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e) |
+
+## How it fits together
+
+**Trading.** Traders swap through the Router, or directly with a pool. LPs hold a standard Uniswap v4
+PositionManager NFT in DAMM and stock pools, and a `DlmmPositionNFT` in DLMM pairs.
+
+```mermaid
+flowchart TB
+    T([Trader]) -->|swapExactIn| R[Router]
+    R --> D[DAMM pools<br/>DammHook]
+    R --> S[Stock pools<br/>StockHook]
+    R --> P[DLMM pairs<br/>DlmmPair]
+    R --> O[Other Uniswap v4 pools<br/>e.g. Pons graduated pools]
+    R --> C[Pons bonding curves]
+```
+
+Every Fathom venue reads `ProtocolConfig` (pause switch, protocol fee share); stock pools also read
+`AssetRegistry` (Chainlink price, market session, fee and band).
+
+**Fees.** The protocol share of every swap fee ends up as burned $FATHOM.
+
+```mermaid
+flowchart LR
+    V[DAMM pools<br/>Stock pools<br/>DLMM pairs] -->|20 % of each swap fee| FC[FeeCollector]
+    FC -->|convert: fee token to ETH<br/>via the Router| B[Buyback]
+    B -->|buyback: ETH to $FATHOM<br/>in its v4 pool| X((0xdead))
+```
+
+1. A trader swaps through the **Router**, or directly with a pool. Routes are chosen off-chain by
+   quoting every venue (`Router.quoteExactIn`).
+2. Each venue charges its fee on the swap input. The LP part stays in the pool. The protocol part
+   (`ProtocolConfig.protocolFeeShareBps`, 20 % of the fee) goes straight to the **FeeCollector**.
+3. Anyone can call `FeeCollector.convert(token)`. It swaps collected fees to ETH through the Router
+   with an oracle-bounded minimum, and the ETH goes straight to the **Buyback**.
+4. Anyone can call `Buyback.buyback()` once per block. It spends a capped amount of ETH on $FATHOM
+   in its ETH pool, inside a price band, and every token bought goes from the PoolManager straight
+   to `0xdead`.
+
+## The contracts
+
+All sources are in `src/`, Solidity 0.8.26, MIT licensed. Nothing is upgradeable. `address(0)`
+means native ETH everywhere.
+
+### ProtocolConfig
+
+[`src/core/ProtocolConfig.sol`](src/core/ProtocolConfig.sol)
+
+The shared settings every venue reads. It holds three things:
+
+| Setting | Current value | Bounds |
+|---|---|---|
+| `paused` | `false` | When `true`, swaps and new liquidity revert on every venue. Removing liquidity is never checked against it. |
+| `feeCollector` | FeeCollector | Non-zero. Where every venue sends the protocol share of fees. |
+| `protocolFeeShareBps` | 2 000 (20 % of each swap fee) | At most 5 000 (50 %). |
+
+The owner of `ProtocolConfig` is also the only account that may change DLMM bin-step presets.
+
+### AssetRegistry
+
+[`src/core/AssetRegistry.sol`](src/core/AssetRegistry.sol)
+
+The curated list of oracle-priced assets (tokenized stocks now, other real-world assets later) and
+the quote tokens they may be paired with. Only assets in this registry can get a stock pool.
+
+**Assets.** Each asset has an asset class (`STOCK` or `RWA`), a Chainlink USD feed, a heartbeat (the
+maximum age before its price counts as stale) and risk parameters:
+
+| Parameter | Meaning | Deployed value (all 35 stocks) |
+|---|---|---|
+| `openFeeBps` | Swap fee while the US market is open | 30 bps |
+| `closedFeeBps` | Swap fee while it is closed | 150 bps |
+| `staleFeeBps` | Swap fee while the oracle is stale | 500 bps |
+| `openMaxDevBps` | Max distance of the pool price from the oracle price while open | 200 bps (2 %) |
+| `closedMaxDevBps` | Same, while closed or stale | 50 bps (0.5 %) |
+| `heartbeat` | Max oracle age | 90 000 s (25 h; the feeds update at least every 24 h) |
+
+Fees are capped at 1 000 bps (10 %) by the contract. The registry holds 35 stock tokens, every
+Robinhood stock token that has a Chainlink feed on chain 4663 (NVDA, MSFT, AAPL, GOOGL, AMZN, META,
+TSM, TSLA, SPY, QQQ and more; the full list is in `script/RobinhoodAddresses.sol`).
+
+**Quotes.** USDG is pegged at exactly $1 (no feed). Native ETH and WETH are priced by Chainlink
+ETH / USD.
+
+**Market session.** `isMarketOpen()` is true Monday to Friday between `sessionOpenUtc` and
+`sessionCloseUtc`, except on days the owner marked as a holiday. The current window is
+13:30–20:00 UTC, which is the NYSE regular session (09:30–16:00 New York time) during US daylight
+saving time; the owner shifts it by one hour when the clocks change.
+
+**Reads.** `assetPrice` and `quotePrice` return a USD price with 18 decimals and a `stale` flag, and
+revert on a non-positive answer. `riskParams(asset)` returns the fee and max deviation that apply
+right now, together with the oracle and session state.
+
+### FathomHookBase
+
+[`src/hooks/FathomHookBase.sol`](src/hooks/FathomHookBase.sol)
+
+The shared base of the two Uniswap v4 hooks. It decides which v4 callbacks the hooks use and how
+fees are split.
+
+- **Permissions:** `beforeInitialize`, `beforeAddLiquidity`, `beforeSwap`, `afterSwap` and the two
+  swap return-delta flags. There is deliberately **no `beforeRemoveLiquidity`**, so a hook can never
+  block an LP from withdrawing.
+- **Pool creation** goes through the hook's own `createPool` only (`beforeInitialize` rejects any
+  other caller), and the pool must use the dynamic-fee flag.
+- **Pause:** adding liquidity and swapping revert while `ProtocolConfig.paused` is set.
+- **Fee split:** each hook computes a total fee. `protocolFeeShareBps` of it is the protocol part,
+  the rest is the LP part. The LP part is handed to the PoolManager as the swap's dynamic LP fee, so
+  it accrues to LPs exactly like a normal Uniswap v4 fee. The protocol part is taken by the hook on
+  the swap's input currency: in `beforeSwap` for exact-input swaps (taken off the input before the
+  pool swaps), in `afterSwap` for exact-output swaps.
+- **Fee delivery:** the protocol part is sent straight to the FeeCollector with `poolManager.take`.
+  If the PoolManager does not hold enough of that currency at that moment (the trader settles after
+  the swap), the hook mints an ERC-6909 claim to itself instead, and anyone can call
+  `sweep(currency)` later to redeem it to the FeeCollector.
+
+### DammHook
+
+[`src/hooks/DammHook.sol`](src/hooks/DammHook.sol)
+
+Permissionless dynamic-fee pools, modelled on Meteora DAMM v2. Anyone can create a pool for any
+token pair with `createPool(key, sqrtPriceX96, params)`:
+
+| Parameter | Range | Meaning |
+|---|---|---|
+| `baseFeeBps` | 5–100 | The pool's normal fee |
+| `snipeSeconds` | 0–3 600 | Length of the anti-snipe window after creation (0 = off) |
+| `snipeStartFeeBps` | base–5 000 | Fee at the moment of creation; decays linearly to the base fee over `snipeSeconds` |
+| `variableFeeControl` | any | Strength of the volatility surcharge (0 = off; 10 000 adds about 10 bps after a 100-tick move) |
+
+The fee of a swap is the scheduled fee (the base fee, or the decaying snipe fee inside the window)
+plus a volatility surcharge of `variableFeeControl × vol² / 1e5` pips. `vol` accumulates the
+absolute tick movement of every swap and decays linearly to zero over 600 seconds, so the fee rises
+during sharp moves and falls back when the market calms down. The total is capped at 500 bps (5 %)
+outside the snipe window.
+
+`currentFee(poolId)` returns the fee that would apply right now (LP part and total). Events:
+`DammPoolCreated` and, on every swap, `DammSwapFee`.
+
+### StockHook
+
+[`src/hooks/StockHook.sol`](src/hooks/StockHook.sol)
+
+Uniswap v4 pools for tokenized stocks whose price is anchored to Chainlink.
+
+**Creation.** `createPool(key, sqrtPriceX96)` is permissionless, but one side of the pool must be an
+enabled `AssetRegistry` asset and the other an enabled quote (USDG, ETH or WETH). Passing
+`sqrtPriceX96 = 0` starts the pool at the oracle price; any other start price must be inside the
+oracle band.
+
+**Every swap:**
+
+1. The hook reads the asset's and the quote's USD prices and computes the oracle price of the pool
+   (adjusted for both tokens' decimals) and a band of ± `maxDevBps` around it.
+2. The fee comes from `AssetRegistry.riskParams`: 30 bps while the market is open, 150 bps while it
+   is closed, 500 bps while the asset or quote oracle is stale. It is split between LPs and the
+   protocol like in every Fathom venue.
+3. After the swap, the pool price must be inside the band. A swap that ends outside the band is
+   only allowed if it moved the price **strictly closer** to the oracle price, so arbitrageurs can
+   always pull a drifted pool back. Otherwise it reverts with `PriceOutOfBand`.
+4. While an oracle is stale, only swaps that move the price toward the last oracle price are
+   allowed (`StaleAwayFromOracle` otherwise).
+
+So trading continues around the clock, but outside market hours the band is tighter (0.5 %
+instead of 2 %) and the fee is higher, which protects LPs from trading against stale prices.
+
+Views: `bandSqrtPrices(poolId)` and `oracleState(poolId)` (oracle price, fee, session and
+staleness). Event on every swap: `StockSwap`.
+
+### HookDeployer
+
+[`src/hooks/HookDeployer.sol`](src/hooks/HookDeployer.sol)
+
+A library used only by the deploy script and the tests, not a deployed contract. A Uniswap v4 hook's
+address must encode its permissions in its lowest bits, so the hooks are deployed with CREATE2
+through the standard deterministic deployer (`0x4e59b44847b379578588920cA78FbF26c0B4956C`) with a salt
+mined by `HookMiner` until the address carries exactly the permission flags above.
+
+### DlmmFactory
+
+[`src/dlmm/DlmmFactory.sol`](src/dlmm/DlmmFactory.sol)
+
+Creates DLMM pairs. `createPair(tokenX, tokenY, binStep, activeId)` is permissionless (except while
+paused): one pair per token pair and bin step, deployed with CREATE2 so the address is predictable.
+`getPair`, `isPair` and `allPairs` index them.
+
+The bin step is the price distance between two neighbouring bins, in bps. Only bin steps with an
+enabled preset can be used. Each preset holds the pair's fee parameters, which are copied into the
+pair at creation (a later preset change only affects new pairs):
+
+| Bin step | Base fee | Variable fee at max volatility |
+|---|---|---|
+| 1 | 2 bps | ≈ 1 % |
+| 5 | 5 bps | ≈ 1 % |
+| 10 | 10 bps | ≈ 1 % |
+| 25 | 20 bps | ≈ 1 % |
+| 50 | 40 bps | ≈ 1 % |
+| 100 | 80 bps | ≈ 1 % |
+
+Shared by all presets: filter period 30 s, decay period 600 s, reduction factor 50 %, max
+volatility accumulator 350 000. The total fee is capped at 10 % by the pair.
+
+### DlmmPair
+
+[`src/dlmm/DlmmPair.sol`](src/dlmm/DlmmPair.sol) with
+[`src/libraries/BinMath.sol`](src/libraries/BinMath.sol) and
+[`src/libraries/BinTree.sol`](src/libraries/BinTree.sol)
+
+A discrete-bin AMM written from scratch after the Liquidity Book v2.1 design.
+
+**Bins.** Liquidity sits in bins. Bin `id` has the fixed price
+`price(id) = (1 + binStep / 10 000) ^ (id − 2²³)` (Y per X in raw units, 128.128 fixed point,
+computed by `BinMath`). Inside one bin the price does not move: a swap there is a constant-sum
+exchange at that bin's price. The **active bin** holds both tokens, bins below it hold only Y and
+bins above it hold only X.
+
+**Swaps.** `swap(swapForY, to)` follows the "pay first" pattern: the input is sent to the pair
+first, and the pair measures it from its balance. The swap uses up the active bin, then jumps to the
+next bin that holds liquidity. `BinTree`, a three-level 256-ary bitmap over the 24-bit id space,
+finds that bin in a constant number of storage reads. `getSwapOut` quotes a swap without executing
+it.
+
+**Fees.** Charged on the input token, bin by bin:
+
+- base fee = `baseFactor × binStep × 1e10` (1e18 = 100 %),
+- variable fee = `(volatilityAccumulator × binStep)² × variableFeeControl / 100`.
+
+The volatility accumulator grows with the number of bins a swap crosses, and decays between swaps
+(after `filterPeriod` it is cut by `reductionFactor`, after `decayPeriod` it resets). The LP part of
+the fee stays in the bin, so LPs collect it when they withdraw. The protocol part is transferred to
+the FeeCollector on every swap.
+
+**Liquidity.** `mint(to, ids, distributionX, distributionY)` deposits tokens already sent to the pair
+across the given bins (the distributions are 1e18-scaled shares of the tokens received; unused
+tokens are refunded). X can only go into bins at or above the active bin, Y only at or below it.
+Shares are tracked per (bin, owner). `burn(from, to, ids, amounts)` withdraws them and **never checks
+the pause flag**.
+
+**Composition fee.** Depositing into the active bin with a different X:Y mix than the bin holds is
+partly a swap. Without a fee, a deposit followed by an immediate withdrawal would be a fee-free swap.
+So that implied swap pays the normal swap fee (Liquidity Book v2.1 `getCompositionFees`), which stays
+with the bin's existing LPs except for the protocol share.
+
+### DlmmPositionNFT
+
+[`src/dlmm/DlmmPositionNFT.sol`](src/dlmm/DlmmPositionNFT.sol)
+
+The way LPs normally use DLMM pairs. An ERC-721 ("Fathom DLMM Position", `FTHM-DLMM`) over a
+contiguous bin range: the NFT contract holds the pair shares and each token id records its share
+per bin.
+
+- `mint(pair, lowerId, upperId, amountX, amountY, distributionX, distributionY, to, guard)` pulls
+  the tokens, deposits them over the range and mints the NFT. Unused tokens are refunded.
+- `increase` adds to an existing position over the same range.
+- `decrease(tokenId, bps, to, amountXMin, amountYMin, deadline)` withdraws a fraction of every bin,
+  including the fees earned. `burn` withdraws everything and burns the NFT.
+
+Every deposit carries a `DepositGuard`: the deadline, the active bin the caller priced against plus
+an allowed slippage in bins, and minimum amounts that must actually land in the bins. Withdrawals take
+minimum amounts and a deadline. Together these stop a sandwich attack from moving the price between
+signing and execution. Only the NFT owner or an approved address can change a position.
+
+### Router and PonsAdapter
+
+[`src/periphery/Router.sol`](src/periphery/Router.sol),
+[`src/periphery/PonsAdapter.sol`](src/periphery/PonsAdapter.sol),
+[`src/interfaces/IRouter.sol`](src/interfaces/IRouter.sol)
+
+One exact-input router across every venue on the chain:
+
+```solidity
+function swapExactIn(Hop[] hops, uint256 amountIn, uint256 minAmountOut, address to, uint256 deadline)
+    external payable returns (uint256 out);
+```
+
+A route is a list of hops. Each hop has a kind and ABI-encoded data:
+
+| Kind | Name | `data` | Venue |
+|---|---|---|---|
+| 0 | `V4` | `(PoolKey key, bool zeroForOne, bytes hookData)` | Any Uniswap v4 pool: DAMM, stock, Pons graduated pools, anything else |
+| 1 | `DLMM` | `(address pair, bool swapForY)` | A Fathom DLMM pair |
+| 2 | `PONS_CURVE` | `(address curve, bool isBuy)` | A Pons bonding curve that has not graduated yet |
+| 3 | `WETH_WRAP` | empty | Wraps or unwraps ETH ↔ WETH |
+
+- Up to 3 swap hops per route (wrap hops do not count). `routeTokens` checks that every hop's input
+  is the previous hop's output.
+- Native ETH can be sent as `msg.value` and is wrapped automatically when the first hop needs WETH.
+  ETH/WETH mismatches between hops are bridged automatically. A final `WETH_WRAP` hop unwraps the
+  output to native ETH.
+- Every v4 hop is one PoolManager `unlock` and must fill completely (`PartialFill` otherwise). The
+  only price check is `minAmountOut` on the final output, plus the `deadline`.
+- `quoteExactIn(hops, amountIn)` returns the exact output of a route, to be called with `eth_call`.
+  v4 hops are simulated and reverted, DLMM hops use `getSwapOut`, curve hops are computed from the
+  curve's reserves and fees.
+- The router has no owner and holds nothing between calls: each hop's output lands in the router and
+  is spent by the next hop or sent to `to` in the same transaction.
+
+`PonsAdapter` is a library compiled into the Router. It buys and sells on Pons bonding curves
+(Robinhood Chain's token launchpad) before graduation and quotes them from reserves, including the
+curve fee, the creator tax and the launch snipe tax. A graduated curve reverts `PonsGraduated()`;
+the token then trades in its Pons v4 pool, which the router reaches with a normal `V4` hop.
+
+### FeeCollector
+
+[`src/periphery/FeeCollector.sol`](src/periphery/FeeCollector.sol)
+
+Receives the protocol share of fees from every venue, in whatever token they were paid, plus ETH.
+
+- The owner sets a **route** per fee token with `setRoute(token, hops, maxPerCall, useOracle)`. The
+  route must be a valid Router path from that token to native ETH.
+- `convert(token, amount)` is **permissionless**. It swaps up to `maxPerCall` of the token through
+  the Router and sends the ETH straight to the Buyback. If the route uses the oracle, the minimum
+  output comes from `AssetRegistry` prices minus `maxSlippageBps` (3 %, at most 20 %), and the call
+  reverts if either price is stale. Caps per call keep each conversion small relative to pool depth.
+- `forwardEth()` is permissionless and sends ETH fees held by the collector to the Buyback.
+- `sweep` lets the owner recover a token only if it has **no** conversion route (stray or
+  unsupported tokens). Tokens with a route can only leave through `convert`, into the Buyback.
+
+### Buyback
+
+[`src/periphery/Buyback.sol`](src/periphery/Buyback.sol)
+
+Turns the ETH from fees into $FATHOM buy pressure and burns what it buys.
+
+- `configure(poolKey, hookData)` is a one-shot owner call that sets the ETH / $FATHOM Uniswap v4
+  pool (native ETH as `currency0`, typically the token's Pons graduated pool). Until it is called,
+  `buyback()` reverts `NotConfigured` and ETH simply accumulates in the contract.
+- `buyback()` is **permissionless** and runs at most once per block. It spends up to
+  `maxEthPerCall` (currently 0.05 ETH) minus a caller reward, and the tokens it buys go directly from
+  the PoolManager to `0xdead`; nothing is held by the contract. The caller receives
+  `callerRewardBps` (0.5 %, at most 5 %) of the ETH spent.
+
+**Price guard.** $FATHOM has no Chainlink feed, so the guard is derived from the pool itself:
+
+- A reference price is set on `configure`. It follows the pool price, but it can move by at most
+  `driftBpsPerHour` (10 % per hour) of elapsed time and at most `maxDeviationBps` per update. With no
+  time elapsed it does not move at all, so a price pump inside one block cannot shift it.
+- `buyback()` reverts if the pool price is more than `maxDeviationBps` (5 %) away from the reference,
+  and the swap itself stops at the edge of that band. A buyback therefore never pays more than
+  reference + 5 %, and a front-running pump just makes it revert. Unspent ETH stays for the next call.
+- Anyone can call `poke()` to move the reference toward the pool price by the drift accrued so far,
+  so buybacks resume on their own after a genuine repricing. The owner can also `resetReference()`.
+
+Running totals: `totalEthSpent` and `totalBurned`. Event: `BoughtBack`.
+
+## Fees
+
+| Where | Total fee | LP share | Protocol share |
+|---|---|---|---|
+| DAMM pool | Base 5–100 bps set by the pool creator, + volatility surcharge, max 5 % (optional anti-snipe fee up to 50 % that decays to the base fee within one hour of creation) | 80 % | 20 % |
+| Stock pool | 30 bps market open, 150 bps closed, 500 bps stale oracle | 80 % | 20 % |
+| DLMM pair | Base fee from the bin step + volatility fee, max 10 % | 80 % | 20 % |
+| DLMM active-bin deposit | Swap fee on the implied swap part only (composition fee) | 80 % | 20 % |
+| Router | none | – | – |
+| `Buyback.buyback()` caller | 0.5 % of the ETH spent, paid to the caller | – | – |
+
+The protocol share is `ProtocolConfig.protocolFeeShareBps` (2 000 = 20 % of the fee, capped at 50 %
+by the contract). All of it flows FeeCollector → ETH → Buyback → burned $FATHOM.
+
+## Admin powers
+
+Every owned contract uses `Ownable2Step`. The owner address is listed under
+[Deployed contracts](#deployed-contracts).
+
+| Contract | The owner can | The owner cannot |
+|---|---|---|
+| ProtocolConfig | Pause swaps and new liquidity on every venue; change the fee collector; set the protocol share (≤ 50 % of the fee) | Block withdrawals; touch LP positions; change contract code |
+| AssetRegistry | Add, update and disable stock assets and quotes; set their fees (≤ 10 %) and bands; set the market session and holidays | Change a pool's LP positions. Disabling an asset stops swaps in its stock pools; LPs can still withdraw |
+| DlmmFactory (via the ProtocolConfig owner) | Enable, disable or change bin-step presets | Change the fee parameters of an existing pair |
+| FeeCollector | Set conversion routes, caps and slippage; change the Buyback address; recover tokens that have **no** route | Take tokens that have a route |
+| Buyback | Configure the pool once; tune the price guard (deviation ≤ 20 %, drift ≤ 100 %/h); reset the reference; set `maxEthPerCall` and the caller reward (≤ 5 %) | Withdraw ETH or tokens; point the buyback at a second pool |
+| DammHook, StockHook, DlmmPair, DlmmPositionNFT, Router | No owner | – |
+
+## Safety guards
+
+- **Withdrawals always work.** Neither hook has a remove-liquidity callback, and `DlmmPair.burn` and
+  `DlmmPositionNFT.decrease` / `burn` never read the pause flag.
+- **Oracle band on stock pools.** A swap cannot end outside ± 2 % (0.5 % when the market is closed)
+  of the Chainlink price unless it moves the price toward it.
+- **Stale oracles.** Stock pools charge 5 % and only accept price-correcting swaps while a feed is
+  older than its heartbeat. Oracle-bounded fee conversions revert on a stale price. A non-positive
+  Chainlink answer always reverts.
+- **Anti-snipe and volatility fees** on DAMM pools; the volatility fee on DLMM pairs.
+- **Composition fee** so an active-bin deposit plus withdrawal is never cheaper than a swap
+  (covered by a fuzz test).
+- **Slippage bounds everywhere a user deposits or swaps:** `minAmountOut` and `deadline` on the
+  Router; active-bin slippage, minimum amounts and deadlines on DLMM positions.
+- **Buyback price guard:** a reference that can only move over time, a ± 5 % band, a price limit on
+  the swap itself and one buyback per block.
+- **Reentrancy guards** on the DLMM pair, the position NFT, the FeeCollector and the Buyback.
+
+## Verification
+
+All 10 contracts above (9 protocol contracts plus the seeded DLMM pair) are verified on
+**Sourcify** from the sources in this repository. The source files in `src/` and the pinned library
+versions under `lib/` are byte-identical to the verified sources.
+
+Compiler settings: solc 0.8.26, EVM `cancun`, `via_ir = true`, optimizer on with 44 444 444 runs,
+and no metadata hash (`bytecode_hash = "none"`, `cbor_metadata = false`). Because no metadata hash
+is embedded in the bytecode, Sourcify labels the match "match" instead of "exact match" (explorers
+may say "partial"): that label only means the metadata hash cannot be compared.
+The compiled bytecode itself matches exactly.
+
+You can check it yourself. This compiles the repository and compares every contract's runtime
+bytecode with the code on chain (the byte ranges of immutable values are masked):
+
+```bash
+forge build
+python3 script/check_bytecode.py
+```
+
+```
+MATCH    ProtocolConfig   0xf5c7A7F883d64fa0041FBEB4459E756670bf50a7  (1915 bytes)
+MATCH    AssetRegistry    0xA2cCfA083823A24D10987dD985f72978da614ea9  (6267 bytes)
+MATCH    DammHook         0x13dEa09a13fDF2C32E6CFe0b5A50C4C47AA1a8cC  (10965 bytes)
+...
+```
+
+CI runs the same check on every push.
+
+## Building and testing
+
+Toolchain: [Foundry](https://getfoundry.sh) 1.5.1 and solc 0.8.26. `isolate = true`, so every
+top-level test call is its own transaction (needed for the hooks' EIP-1153 transient storage).
+
+```bash
+git clone --recursive https://github.com/FathomPools/fathom-contracts
+cd fathom-contracts
+forge build
+forge test
+```
+
+The test suites cover the DLMM (swaps across bins, liquidity, composition fee including a fuzz test,
+position NFT guards, pause behaviour), both hooks (fee split, fee claims and `sweep`, anti-snipe and
+volatility decay, oracle band, market session and staleness), the Router (v4, DLMM, ETH/WETH,
+multi-hop, quotes) and the fee pipeline (conversion, oracle floors, every buyback price-guard case).
+
+Two suites fork mainnet: a stock pool against the real NVDA token and its Chainlink feed (latest
+block, public RPC by default, override with `ROBINHOOD_RPC_URL`), and the Router against live Pons
+curves and graduated pools. The Pons suite pins block 71 377 700, so it needs an archive endpoint in
+`PONS_FORK_RPC`; the public RPC prunes historical state, which is why CI skips that one suite. The end-to-end suites in `test/e2e` run only when
+`E2E_RPC_URL` points at a local anvil fork where the deploy scripts have been run (see the comments
+at the top of those files).
+
+Deploy scripts (used for the mainnet deployment above):
+
+```bash
+forge script script/Deploy.s.sol --rpc-url $ROBINHOOD_RPC_URL --broadcast   # + your signer flags
+forge script script/Seed.s.sol   --rpc-url $ROBINHOOD_RPC_URL --broadcast
+```
+
+`Deploy.s.sol` deploys everything, registers ETH, WETH, USDG and the 35 stock tokens, and writes
+`deployments/robinhood.json`. The broadcaster becomes the owner. `Seed.s.sol` creates the launch pools.
+
+## Repository layout
+
+```
+src/
+  core/          ProtocolConfig, AssetRegistry
+  hooks/         FathomHookBase, DammHook, StockHook, HookDeployer (CREATE2 salt mining)
+  dlmm/          DlmmFactory, DlmmPair, DlmmPositionNFT
+  libraries/     BinMath (bin prices, fee math), BinTree (next non-empty bin)
+  periphery/     Router, PonsAdapter, FeeCollector, Buyback
+  interfaces/    IRouter, IDlmmPair, IPonsCurve, IAggregatorV3
+script/          Deploy, Seed, RobinhoodAddresses (every external address), check_bytecode.py
+deployments/     robinhood.json, the mainnet address manifest
+test/            dlmm/, hooks/, periphery/ (unit and fork suites), e2e/ (local fork), utils/
+lib/             git submodules: forge-std v1.10.0, OpenZeppelin uniswap-hooks v1.1.0
+                 (brings Uniswap v4-core, v4-periphery and OpenZeppelin Contracts 5.0)
+```
+
+## License
+
+MIT, see [LICENSE](LICENSE).

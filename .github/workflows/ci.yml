@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  forge:
+    name: build, test, match mainnet bytecode
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.1
+
+      - name: forge build
+        run: forge build
+
+      - name: forge test
+        # PonsFork pins an old block and needs an archive RPC (PONS_FORK_RPC); the public RPC prunes
+        # historical state, so CI runs every other suite, including the live-state StockFork suite.
+        run: forge test -vv --no-match-path 'test/periphery/PonsFork.t.sol'
+
+      - name: compiled bytecode == deployed bytecode
+        run: python3 script/check_bytecode.py

@@ -1,0 +1,9 @@
+out/
+cache/
+broadcast/
+deployments/local.json
+.env
+.env.*
+!.env.example
+.DS_Store
+__pycache__/

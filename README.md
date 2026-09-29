@@ -64,10 +64,11 @@ burn the **$FATHOM** token.
 
 Robinhood Chain mainnet, chain id 4663, deployed from block 72 268 876. The same addresses are in
 [`deployments/robinhood.json`](deployments/robinhood.json). Every contract's source is verified on
-[Sourcify](https://sourcify.dev), and the source in this repository is byte-identical to the verified
-source (see [Verification](#verification)).
+both [Blockscout](https://robinhoodchain.blockscout.com) (the address links open the verified code)
+and [Sourcify](https://sourcify.dev), and the source in this repository is byte-identical to the
+verified source (see [Verification](#verification)).
 
-| Contract | Address (Blockscout) | Verified source (Sourcify) | Role |
+| Contract | Address (verified on Blockscout) | Verified source (Sourcify) | Role |
 |---|---|---|---|
 | ProtocolConfig | [`0xf5c7A7F883d64fa0041FBEB4459E756670bf50a7`](https://robinhoodchain.blockscout.com/address/0xf5c7A7F883d64fa0041FBEB4459E756670bf50a7?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0xf5c7A7F883d64fa0041FBEB4459E756670bf50a7) | Owner, pause switch, protocol fee share |
 | AssetRegistry | [`0xA2cCfA083823A24D10987dD985f72978da614ea9`](https://robinhoodchain.blockscout.com/address/0xA2cCfA083823A24D10987dD985f72978da614ea9?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0xA2cCfA083823A24D10987dD985f72978da614ea9) | Stock tokens, Chainlink feeds, risk parameters, market hours |
@@ -506,13 +507,13 @@ Every owned contract uses `Ownable2Step`. The owner address is listed under
 ## Verification
 
 All 10 contracts above (9 protocol contracts plus the seeded DLMM pair) are verified on
-**Sourcify** from the sources in this repository. The source files in `src/` and the pinned library
-versions under `lib/` are byte-identical to the verified sources.
+**Blockscout** and **Sourcify** from the sources in this repository. The source files in `src/` and
+the pinned library versions under `lib/` are byte-identical to the verified sources.
 
 Compiler settings: solc 0.8.26, EVM `cancun`, `via_ir = true`, optimizer on with 44 444 444 runs,
 and no metadata hash (`bytecode_hash = "none"`, `cbor_metadata = false`). Because no metadata hash
-is embedded in the bytecode, Sourcify labels the match "match" instead of "exact match" (explorers
-may say "partial"): that label only means the metadata hash cannot be compared.
+is embedded in the bytecode, Blockscout labels the match "partial" and Sourcify "match" instead of
+"full" / "exact match": that label only means the metadata hash cannot be compared.
 The compiled bytecode itself matches exactly.
 
 You can check it yourself. This compiles the repository and compares every contract's runtime

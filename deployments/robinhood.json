@@ -11,5 +11,6 @@
   "protocolConfig": "0xf5c7A7F883d64fa0041FBEB4459E756670bf50a7",
   "router": "0x2303cC5a9CCdDBA50daf04aeece372Fd99813F8B",
   "startBlock": 72268876,
-  "stockHook": "0xa8122E55fbcb3F81cdC5418aeBd77351C0e568cC"
+  "stockHook": "0xa8122E55fbcb3F81cdC5418aeBd77351C0e568cC",
+  "dlmmVaultFactory": "0x6FeBd590AB58EcfcB227047bACa183Fd948eAb18"
 }

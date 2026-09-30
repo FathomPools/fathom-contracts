@@ -5,6 +5,7 @@ Immutable values (constructor-set addresses and parameters) are written into the
 deploy time, so their byte ranges are masked on both sides before comparing.
 
     forge build
+    FOUNDRY_PROFILE=deploy forge build          # the vault contracts (200 optimizer runs)
     python3 script/check_bytecode.py            # uses the public RPC
     ROBINHOOD_RPC_URL=<your rpc> python3 script/check_bytecode.py
 
@@ -31,6 +32,12 @@ DEPLOYED = {
     "Buyback": "0x8b3d718843fd9167a52BDed64554131e39b4042F",
 }
 
+# Built with FOUNDRY_PROFILE=deploy (optimizer_runs = 200) into out-deploy/.
+DEPLOYED_200_RUNS = {
+    "DlmmVaultFactory": "0x6FeBd590AB58EcfcB227047bACa183Fd948eAb18",
+    "DlmmVault": "0x9DACCa4aAE3BC2f785e5D3F6302855c6042F7B66",  # WETH/USDG, 41 bins, Spot
+}
+
 
 def masked(code: bytearray, refs: dict) -> bytearray:
     code = bytearray(code)
@@ -42,8 +49,9 @@ def masked(code: bytearray, refs: dict) -> bytearray:
 
 def main() -> int:
     ok = True
-    for name, address in DEPLOYED.items():
-        with open(f"out/{name}.sol/{name}.json") as f:
+    contracts = [("out", n, a) for n, a in DEPLOYED.items()] + [("out-deploy", n, a) for n, a in DEPLOYED_200_RUNS.items()]
+    for out, name, address in contracts:
+        with open(f"{out}/{name}.sol/{name}.json") as f:
             artifact = json.load(f)["deployedBytecode"]
         local = bytearray.fromhex(artifact["object"][2:])
         chain_hex = subprocess.check_output(["cast", "code", address, "--rpc-url", RPC]).decode().strip()

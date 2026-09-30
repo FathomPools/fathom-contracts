@@ -7,8 +7,10 @@ are no proxies and no upgrade path.
 
 What the owner key can and cannot do is listed in the README under
 [Admin powers](README.md#admin-powers). In short: it can pause swaps and new liquidity, tune fee
-and oracle parameters within hard-coded caps, and manage the fee-to-buyback pipeline. It cannot
-move, freeze or withdraw anyone's liquidity, and removing liquidity is never paused.
+and oracle parameters within hard-coded caps, manage the fee-to-buyback pipeline, and create DLMM
+vaults and name their keeper. The keeper (and the owner) can only rebalance a vault within its limits:
+the tokens go back into the same pair and are never swapped. Neither can freeze or withdraw anyone's
+liquidity, and removing liquidity is never paused.
 
 ## Reporting a vulnerability
 
@@ -30,4 +32,4 @@ fix or mitigation is public, unless you prefer to stay anonymous.
 
 Everything under `src/` at the addresses listed in the README. Out of scope: third-party contracts
 the protocol integrates with (Uniswap v4 PoolManager and PositionManager, Chainlink feeds, Pons
-curves and pools, WETH, USDG), the web app and the indexer.
+curves and pools, WETH, USDG), the web app, the indexer and the off-chain vault keeper.

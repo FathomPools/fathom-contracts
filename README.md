@@ -16,7 +16,8 @@
 This repository holds the smart contracts behind [Fathom](https://fathompools.xyz), exactly as they
 are deployed on **Robinhood Chain mainnet** (chain id 4663), with an explanation of what each one does.
 
-Fathom gives Robinhood Chain three kinds of liquidity pools and one router across all of them:
+Fathom gives Robinhood Chain three kinds of liquidity pools, auto-rebalancing vaults on top of them
+and one router across all of them:
 
 - **DAMM pools**: permissionless Uniswap v4 pools whose fee moves with volatility (Meteora DAMM v2
   style), with an optional anti-snipe fee at launch.
@@ -24,6 +25,8 @@ Fathom gives Robinhood Chain three kinds of liquidity pools and one router acros
   to stay inside a band around the oracle price, and the fee follows the US market session.
 - **DLMM pairs**: a discrete-bin, concentrated-liquidity AMM in the Liquidity Book design, with
   bin-range positions held as NFTs.
+- **DLMM vaults**: ERC-20 vaults that hold one DLMM position and lay it out again around the price
+  when the price moves away. Rebalancing never swaps and the vaults charge no fee.
 - **Router**: one exact-input, multi-hop router across all three venues, any other Uniswap v4 pool
   and Pons bonding curves.
 
@@ -49,6 +52,8 @@ burn the **$FATHOM** token.
   - [DlmmFactory](#dlmmfactory)
   - [DlmmPair](#dlmmpair)
   - [DlmmPositionNFT](#dlmmpositionnft)
+  - [DlmmVaultFactory](#dlmmvaultfactory)
+  - [DlmmVault](#dlmmvault)
   - [Router and PonsAdapter](#router-and-ponsadapter)
   - [FeeCollector](#feecollector)
   - [Buyback](#buyback)
@@ -79,10 +84,18 @@ verified source (see [Verification](#verification)).
 | Router | [`0x2303cC5a9CCdDBA50daf04aeece372Fd99813F8B`](https://robinhoodchain.blockscout.com/address/0x2303cC5a9CCdDBA50daf04aeece372Fd99813F8B?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x2303cC5a9CCdDBA50daf04aeece372Fd99813F8B) | Multi-hop swaps across every venue |
 | FeeCollector | [`0x51F34Ca37DD144a7709ee81c21AC7e850BC3A453`](https://robinhoodchain.blockscout.com/address/0x51F34Ca37DD144a7709ee81c21AC7e850BC3A453?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x51F34Ca37DD144a7709ee81c21AC7e850BC3A453) | Receives protocol fees, converts them to ETH |
 | Buyback | [`0x8b3d718843fd9167a52BDed64554131e39b4042F`](https://robinhoodchain.blockscout.com/address/0x8b3d718843fd9167a52BDed64554131e39b4042F?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x8b3d718843fd9167a52BDed64554131e39b4042F) | Buys $FATHOM with ETH and burns it |
+| DlmmVaultFactory | [`0x6FeBd590AB58EcfcB227047bACa183Fd948eAb18`](https://robinhoodchain.blockscout.com/address/0x6FeBd590AB58EcfcB227047bACa183Fd948eAb18?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x6FeBd590AB58EcfcB227047bACa183Fd948eAb18) | Creates DLMM vaults, names the keeper |
+| DlmmVault (WETH / USDG) | [`0x9DACCa4aAE3BC2f785e5D3F6302855c6042F7B66`](https://robinhoodchain.blockscout.com/address/0x9DACCa4aAE3BC2f785e5D3F6302855c6042F7B66?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x9DACCa4aAE3BC2f785e5D3F6302855c6042F7B66) | Auto-rebalancing vault on the WETH / USDG DLMM pair (`fvWETH-USDG`) |
 
 Owner of every owned contract (`ProtocolConfig`, `AssetRegistry`, `FeeCollector`, `Buyback`):
 [`0x29A99360467CEB0D726450A09337b19A9D2ac5b7`](https://robinhoodchain.blockscout.com/address/0x29A99360467CEB0D726450A09337b19A9D2ac5b7), the deployer.
-Ownership uses `Ownable2Step`, so a transfer only completes when the new owner accepts it.
+Ownership uses `Ownable2Step`, so a transfer only completes when the new owner accepts it. The vault
+factory has no owner of its own: it follows the `ProtocolConfig` owner.
+
+The vault contracts were deployed later than the rest (block 76 785 672) by
+[`script/DeployVaults.s.sol`](script/DeployVaults.s.sol). The vault keeper is
+[`0xD5eBe812E36f7C6eC0b1A802fBefC294954bFD38`](https://robinhoodchain.blockscout.com/address/0xD5eBe812E36f7C6eC0b1A802fBefC294954bFD38),
+an automated account that only calls `rebalance`.
 
 ### Launch pools
 
@@ -132,6 +145,17 @@ flowchart TB
 
 Every Fathom venue reads `ProtocolConfig` (pause switch, protocol fee share); stock pools also read
 `AssetRegistry` (Chainlink price, market session, fee and band).
+
+**Vaults.** A `DlmmVault` is an LP like any other in its DLMM pair: it holds pair shares in a range of
+bins and issues ERC-20 shares for them. The keeper moves that range when the price moves away.
+
+```mermaid
+flowchart LR
+    U([Depositor]) -->|deposit / withdraw| V[DlmmVault<br/>ERC-20 shares]
+    K([Keeper]) -->|rebalance| V
+    V -->|mint / burn bins| P[DLMM pair]
+    F[DlmmVaultFactory] -.->|creates, names the keeper| V
+```
 
 **Fees.** The protocol share of every swap fee ends up as burned $FATHOM.
 
@@ -375,6 +399,71 @@ an allowed slippage in bins, and minimum amounts that must actually land in the 
 minimum amounts and a deadline. Together these stop a sandwich attack from moving the price between
 signing and execution. Only the NFT owner or an approved address can change a position.
 
+### DlmmVaultFactory
+
+[`src/vaults/DlmmVaultFactory.sol`](src/vaults/DlmmVaultFactory.sol)
+
+Creates the vaults and holds the keeper address they accept rebalances from. Both
+`createVault(pair, halfWidth, shape)` and `setKeeper(keeper)` are restricted to the `ProtocolConfig`
+owner, so the vault list is curated. There is one vault per (pair, half width, shape), deployed with
+CREATE2 from those three values; `getVault`, `isVault`, `allVaults` and `getVaults()` index them.
+
+The factory itself was deployed with CREATE2 through the standard deterministic deployer
+(`0x4e59b44847b379578588920cA78FbF26c0B4956C`), so its address was fixed before it went on chain.
+
+### DlmmVault
+
+[`src/vaults/DlmmVault.sol`](src/vaults/DlmmVault.sol)
+
+An auto-rebalancing position in one DLMM pair. The vault holds pair shares over
+`[lowerId, upperId] = activeId ± halfWidth` and issues ERC-20 shares ("Fathom Vault X-Y", `fvX-Y`,
+with the decimals of token Y). Swap fees earned by its bins stay in the bins and compound. The vault
+charges no fee of its own.
+
+| Parameter | WETH / USDG vault | Bounds |
+|---|---|---|
+| `halfWidth` | 20 bins each side (41 bins, ± 2 % at bin step 10) | 1–50 |
+| `shape` | 0, Spot (equal weight per bin) | 0 Spot, 1 Curve (weight falls off with distance from the active bin), 2 Bid-Ask (weight grows with distance) |
+
+**Deposit.** `deposit(amountXMax, amountYMax, minShares, to, activeIdDesired, idSlippage, deadline)`.
+
+- The first deposit opens the range around the active bin, lays the tokens out with the vault's
+  shape and mints shares equal to the deposit's value in Y at the active price. 1 000 shares are
+  locked at `0xdead` so the share price cannot be inflated by a tiny first deposit plus a donation.
+- Every later deposit takes both tokens in the vault's current X:Y mix (the largest amount both
+  maxima can pay for) and pulls only what it takes. It is added to every bin in the same proportion
+  the vault already holds there, and the slice of the idle balance stays idle. A deposit is therefore
+  an exact slice of the vault: share pricing needs no price at all, and moving the pool price before a
+  deposit cannot dilute existing holders (covered by a test that deposits between a price push and its
+  reversal).
+- Bins where a deposit would mint dust pair shares are skipped; those tokens stay idle in the vault
+  and still count toward its total.
+- Guards: deadline, active bin within `idSlippage` of `activeIdDesired`, `minShares`. Deposits
+  revert while the protocol is paused.
+
+**Withdraw.** `withdraw(shares, to, amountXMin, amountYMin, deadline)` burns the shares and sends
+their slice of every bin and of the idle balance, fees included, straight to `to`. It **never checks
+the pause flag**.
+
+**Rebalance.** `rebalance(activeIdDesired, idSlippage)` pulls every bin of the position and lays the
+whole balance out again over the active bin ± `halfWidth` with the vault's shape: X at and above the
+active bin, Y at and below it, the only mix the pair accepts from any LP. It **never swaps**, so the
+vault keeps the tokens it had. The active bin only receives its own current X:Y ratio, so the
+deposit is not part swap and pays no composition fee; what does not fit moves one bin out on its own
+side. A rebalance is only allowed when
+
+1. the caller is the factory's keeper or the `ProtocolConfig` owner,
+2. the active bin is more than `halfWidth / 2` bins from the centre of the current range,
+3. at least `MIN_REBALANCE_INTERVAL` (5 minutes) has passed since the last one,
+4. the active bin is within `idSlippage` of `activeIdDesired`, and the protocol is not paused.
+
+The keeper runs off-chain and only rebalances once condition 2 has held for about two minutes, so a
+price pushed within a block or two does not trigger it.
+
+**Views.** `getTotalAmounts()` (idle balance plus the vault's share of every bin), `getBins()` (per-bin
+amounts), `needsRebalance()`, `previewDeposit` and `previewWithdraw`. Events: `Deposit`, `Withdraw`,
+`Rebalance`.
+
 ### Router and PonsAdapter
 
 [`src/periphery/Router.sol`](src/periphery/Router.sol),
@@ -466,6 +555,7 @@ Running totals: `totalEthSpent` and `totalBurned`. Event: `BoughtBack`.
 | Stock pool | 30 bps market open, 150 bps closed, 500 bps stale oracle | 80 % | 20 % |
 | DLMM pair | Base fee from the bin step + volatility fee, max 10 % | 80 % | 20 % |
 | DLMM active-bin deposit | Swap fee on the implied swap part only (composition fee) | 80 % | 20 % |
+| DLMM vault | none (the vault earns the pair's LP fees for its holders) | – | – |
 | Router | none | – | – |
 | `Buyback.buyback()` caller | 0.5 % of the ETH spent, paid to the caller | – | – |
 
@@ -484,12 +574,16 @@ Every owned contract uses `Ownable2Step`. The owner address is listed under
 | DlmmFactory (via the ProtocolConfig owner) | Enable, disable or change bin-step presets | Change the fee parameters of an existing pair |
 | FeeCollector | Set conversion routes, caps and slippage; change the Buyback address; recover tokens that have **no** route | Take tokens that have a route |
 | Buyback | Configure the pool once; tune the price guard (deviation ≤ 20 %, drift ≤ 100 %/h); reset the reference; set `maxEthPerCall` and the caller reward (≤ 5 %) | Withdraw ETH or tokens; point the buyback at a second pool |
+| DlmmVaultFactory (via the ProtocolConfig owner) | Create vaults; set the keeper address | Touch deposits in a vault; change a vault's pair, width or shape |
+| DlmmVault (keeper or ProtocolConfig owner) | `rebalance`, only under the four conditions above | Swap, withdraw or move the vault's tokens anywhere but back into its own pair; block withdrawals |
 | DammHook, StockHook, DlmmPair, DlmmPositionNFT, Router | No owner | – |
 
 ## Safety guards
 
-- **Withdrawals always work.** Neither hook has a remove-liquidity callback, and `DlmmPair.burn` and
-  `DlmmPositionNFT.decrease` / `burn` never read the pause flag.
+- **Withdrawals always work.** Neither hook has a remove-liquidity callback, and `DlmmPair.burn`,
+  `DlmmPositionNFT.decrease` / `burn` and `DlmmVault.withdraw` never read the pause flag.
+- **Vaults:** exact-slice deposits (no price in share pricing), locked minimum shares against share
+  inflation, rebalances that never swap and are bounded by drift, time and active-bin slippage.
 - **Oracle band on stock pools.** A swap cannot end outside ± 2 % (0.5 % when the market is closed)
   of the Chainlink price unless it moves the price toward it.
 - **Stale oracles.** Stock pools charge 5 % and only accept price-correcting swaps while a feed is
@@ -502,12 +596,12 @@ Every owned contract uses `Ownable2Step`. The owner address is listed under
   Router; active-bin slippage, minimum amounts and deadlines on DLMM positions.
 - **Buyback price guard:** a reference that can only move over time, a ± 5 % band, a price limit on
   the swap itself and one buyback per block.
-- **Reentrancy guards** on the DLMM pair, the position NFT, the FeeCollector and the Buyback.
+- **Reentrancy guards** on the DLMM pair, the position NFT, the vaults, the FeeCollector and the Buyback.
 
 ## Verification
 
-All 10 contracts above (9 protocol contracts plus the seeded DLMM pair) are verified on
-**Blockscout** and **Sourcify** from the sources in this repository. The source files in `src/` and
+All 12 contracts above (9 protocol contracts, the seeded DLMM pair, the vault factory and the
+WETH / USDG vault) are verified on **Blockscout** and **Sourcify** from the sources in this repository. The source files in `src/` and
 the pinned library versions under `lib/` are byte-identical to the verified sources.
 
 Compiler settings: solc 0.8.26, EVM `cancun`, `via_ir = true`, optimizer on with 44 444 444 runs,
@@ -516,11 +610,15 @@ is embedded in the bytecode, Blockscout labels the match "partial" and Sourcify 
 "full" / "exact match": that label only means the metadata hash cannot be compared.
 The compiled bytecode itself matches exactly.
 
+The vault contracts (`src/vaults`) were compiled with the same settings but 200 optimizer runs, the
+`deploy` profile in `foundry.toml` (`FOUNDRY_PROFILE=deploy forge build`, output in `out-deploy/`).
+
 You can check it yourself. This compiles the repository and compares every contract's runtime
 bytecode with the code on chain (the byte ranges of immutable values are masked):
 
 ```bash
 forge build
+FOUNDRY_PROFILE=deploy forge build
 python3 script/check_bytecode.py
 ```
 
@@ -548,7 +646,10 @@ forge test
 The test suites cover the DLMM (swaps across bins, liquidity, composition fee including a fuzz test,
 position NFT guards, pause behaviour), both hooks (fee split, fee claims and `sweep`, anti-snipe and
 volatility decay, oracle band, market session and staleness), the Router (v4, DLMM, ETH/WETH,
-multi-hop, quotes) and the fee pipeline (conversion, oracle floors, every buyback price-guard case).
+multi-hop, quotes), the fee pipeline (conversion, oracle floors, every buyback price-guard case) and
+the vaults (first and proportional deposits, deposits at a pushed price, dust bins, withdrawals while
+paused, rebalance guards and token conservation, shapes, the share-inflation guard, and a fuzz test
+that a deposit and immediate withdrawal never returns more than was put in).
 
 Two suites fork mainnet: a stock pool against the real NVDA token and its Chainlink feed (latest
 block, public RPC by default, override with `ROBINHOOD_RPC_URL`), and the Router against live Pons
@@ -562,10 +663,14 @@ Deploy scripts (used for the mainnet deployment above):
 ```bash
 forge script script/Deploy.s.sol --rpc-url $ROBINHOOD_RPC_URL --broadcast   # + your signer flags
 forge script script/Seed.s.sol   --rpc-url $ROBINHOOD_RPC_URL --broadcast
+FOUNDRY_PROFILE=deploy KEEPER=<keeper> forge script script/DeployVaults.s.sol --rpc-url $ROBINHOOD_RPC_URL --broadcast
 ```
 
 `Deploy.s.sol` deploys everything, registers ETH, WETH, USDG and the 35 stock tokens, and writes
 `deployments/robinhood.json`. The broadcaster becomes the owner. `Seed.s.sol` creates the launch pools.
+`DeployVaults.s.sol` deploys the vault factory at its CREATE2 address (and refuses to if the build
+would land anywhere but the address in `deployments/robinhood.json`), sets the keeper and opens the
+WETH / USDG vault.
 
 ## Repository layout
 
@@ -576,10 +681,11 @@ src/
   dlmm/          DlmmFactory, DlmmPair, DlmmPositionNFT
   libraries/     BinMath (bin prices, fee math), BinTree (next non-empty bin)
   periphery/     Router, PonsAdapter, FeeCollector, Buyback
+  vaults/        DlmmVaultFactory, DlmmVault
   interfaces/    IRouter, IDlmmPair, IPonsCurve, IAggregatorV3
-script/          Deploy, Seed, RobinhoodAddresses (every external address), check_bytecode.py
+script/          Deploy, Seed, DeployVaults, RobinhoodAddresses (every external address), check_bytecode.py
 deployments/     robinhood.json, the mainnet address manifest
-test/            dlmm/, hooks/, periphery/ (unit and fork suites), e2e/ (local fork), utils/
+test/            dlmm/, hooks/, periphery/, vaults/ (unit and fork suites), e2e/ (local fork), utils/
 lib/             git submodules: forge-std v1.10.0, OpenZeppelin uniswap-hooks v1.1.0
                  (brings Uniswap v4-core, v4-periphery and OpenZeppelin Contracts 5.0)
 ```

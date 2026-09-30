@@ -26,3 +26,17 @@ fail_on_revert = true
 
 [rpc_endpoints]
 robinhood = "${ROBINHOOD_RPC_URL}"
+
+# The vault contracts (src/vaults) were deployed from this profile: same settings, 200 optimizer runs.
+# FOUNDRY_PROFILE=deploy forge build
+[profile.deploy]
+src = "src"
+out = "out-deploy"
+libs = ["lib"]
+solc = "0.8.26"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+via_ir = true
+bytecode_hash = "none"
+cbor_metadata = false

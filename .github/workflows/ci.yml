@@ -21,6 +21,9 @@ jobs:
       - name: forge build
         run: forge build
 
+      - name: forge build (deploy profile, used for src/vaults)
+        run: FOUNDRY_PROFILE=deploy forge build
+
       - name: forge test
         # PonsFork pins an old block and needs an archive RPC (PONS_FORK_RPC); the public RPC prunes
         # historical state, so CI runs every other suite, including the live-state StockFork suite.

@@ -26,7 +26,8 @@ and one router across all of them:
 - **DLMM pairs**: a discrete-bin, concentrated-liquidity AMM in the Liquidity Book design, with
   bin-range positions held as NFTs.
 - **DLMM vaults**: ERC-20 vaults that hold one DLMM position and lay it out again around the price
-  when the price moves away. Rebalancing never swaps and the vaults charge no fee.
+  when the price moves away. Rebalancing never swaps and the vaults charge no fee. A zap deposits
+  into a vault with a single token (or native ETH) and withdraws as a single token.
 - **Router**: one exact-input, multi-hop router across all three venues, any other Uniswap v4 pool
   and Pons bonding curves.
 
@@ -54,6 +55,7 @@ burn the **$FATHOM** token.
   - [DlmmPositionNFT](#dlmmpositionnft)
   - [DlmmVaultFactory](#dlmmvaultfactory)
   - [DlmmVault](#dlmmvault)
+  - [DlmmVaultZap](#dlmmvaultzap)
   - [Router and PonsAdapter](#router-and-ponsadapter)
   - [FeeCollector](#feecollector)
   - [Buyback](#buyback)
@@ -86,6 +88,7 @@ verified source (see [Verification](#verification)).
 | Buyback | [`0x8b3d718843fd9167a52BDed64554131e39b4042F`](https://robinhoodchain.blockscout.com/address/0x8b3d718843fd9167a52BDed64554131e39b4042F?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x8b3d718843fd9167a52BDed64554131e39b4042F) | Buys $FATHOM with ETH and burns it |
 | DlmmVaultFactory | [`0x6FeBd590AB58EcfcB227047bACa183Fd948eAb18`](https://robinhoodchain.blockscout.com/address/0x6FeBd590AB58EcfcB227047bACa183Fd948eAb18?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x6FeBd590AB58EcfcB227047bACa183Fd948eAb18) | Creates DLMM vaults, names the keeper |
 | DlmmVault (WETH / USDG) | [`0x9DACCa4aAE3BC2f785e5D3F6302855c6042F7B66`](https://robinhoodchain.blockscout.com/address/0x9DACCa4aAE3BC2f785e5D3F6302855c6042F7B66?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x9DACCa4aAE3BC2f785e5D3F6302855c6042F7B66) | Auto-rebalancing vault on the WETH / USDG DLMM pair (`fvWETH-USDG`) |
+| DlmmVaultZap | [`0x50855565aB1a3f860FCdBAaF87552357fF2d6f8A`](https://robinhoodchain.blockscout.com/address/0x50855565aB1a3f860FCdBAaF87552357fF2d6f8A?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x50855565aB1a3f860FCdBAaF87552357fF2d6f8A) | One-token deposits into and withdrawals out of the vaults |
 
 Owner of every owned contract (`ProtocolConfig`, `AssetRegistry`, `FeeCollector`, `Buyback`):
 [`0x29A99360467CEB0D726450A09337b19A9D2ac5b7`](https://robinhoodchain.blockscout.com/address/0x29A99360467CEB0D726450A09337b19A9D2ac5b7), the deployer.
@@ -95,7 +98,8 @@ factory has no owner of its own: it follows the `ProtocolConfig` owner.
 The vault contracts were deployed later than the rest (block 76 785 672) by
 [`script/DeployVaults.s.sol`](script/DeployVaults.s.sol). The vault keeper is
 [`0xD5eBe812E36f7C6eC0b1A802fBefC294954bFD38`](https://robinhoodchain.blockscout.com/address/0xD5eBe812E36f7C6eC0b1A802fBefC294954bFD38),
-an automated account that only calls `rebalance`.
+an automated account that only calls `rebalance`. The zap was deployed at block 76 834 101 by
+[`script/DeployZap.s.sol`](script/DeployZap.s.sol).
 
 ### Launch pools
 
@@ -155,6 +159,8 @@ flowchart LR
     K([Keeper]) -->|rebalance| V
     V -->|mint / burn bins| P[DLMM pair]
     F[DlmmVaultFactory] -.->|creates, names the keeper| V
+    Z[DlmmVaultZap] -->|swap part via the Router,<br/>then deposit / withdraw| V
+    U -->|one token| Z
 ```
 
 **Fees.** The protocol share of every swap fee ends up as burned $FATHOM.
@@ -464,6 +470,35 @@ price pushed within a block or two does not trigger it.
 amounts), `needsRebalance()`, `previewDeposit` and `previewWithdraw`. Events: `Deposit`, `Withdraw`,
 `Rebalance`.
 
+### DlmmVaultZap
+
+[`src/vaults/DlmmVaultZap.sol`](src/vaults/DlmmVaultZap.sol)
+
+Single-token entry to and exit from the vaults, in one transaction. The zap has no owner, holds
+nothing between calls and only accepts vaults created by `DlmmVaultFactory` (`isVault`).
+
+- `zapIn(params)` takes one of the vault's tokens, or native ETH for a WETH side (wrapped on
+  entry), swaps `swapAmount` of it into the vault's other token through the Router along the given
+  route, and deposits both into the vault for `to`. The vault takes its own X:Y mix, and whatever it
+  does not take goes back to the caller, unwrapped to ETH if the caller paid in ETH.
+- `zapOut(params)` pulls vault shares from the caller (approved to the zap), withdraws them, swaps
+  the side the caller does not want through the Router and sends the whole amount to `to` in one
+  token, or native ETH.
+
+The caller computes the route and the split off-chain (the app swaps
+`s = A · tO / (tO + tT · rate)` of an input `A`, where `tT` / `tO` are the vault's amounts of the input
+and the other token, and leaves the vault's own pair out of the route so the swap does not change the
+mix it is matching). The contract checks what matters on-chain:
+
+- the route's input and output are the right tokens (ETH and WETH are interchangeable), and the
+  output is measured from the balance that actually arrives, with native ETH wrapped;
+- `minSwapOut`, the vault's own `minShares` and active-bin bounds on the way in, `minOut` on the way
+  out, and `deadline` on both;
+- tokens and shares are only ever pulled from `msg.sender`; router and vault allowances are set to
+  the exact amount and reset to zero after each call.
+
+Events: `ZapIn`, `ZapOut`.
+
 ### Router and PonsAdapter
 
 [`src/periphery/Router.sol`](src/periphery/Router.sol),
@@ -556,6 +591,7 @@ Running totals: `totalEthSpent` and `totalBurned`. Event: `BoughtBack`.
 | DLMM pair | Base fee from the bin step + volatility fee, max 10 % | 80 % | 20 % |
 | DLMM active-bin deposit | Swap fee on the implied swap part only (composition fee) | 80 % | 20 % |
 | DLMM vault | none (the vault earns the pair's LP fees for its holders) | – | – |
+| Vault zap | none (the swap part pays the fee of the pools it routes through) | – | – |
 | Router | none | – | – |
 | `Buyback.buyback()` caller | 0.5 % of the ETH spent, paid to the caller | – | – |
 
@@ -576,7 +612,7 @@ Every owned contract uses `Ownable2Step`. The owner address is listed under
 | Buyback | Configure the pool once; tune the price guard (deviation ≤ 20 %, drift ≤ 100 %/h); reset the reference; set `maxEthPerCall` and the caller reward (≤ 5 %) | Withdraw ETH or tokens; point the buyback at a second pool |
 | DlmmVaultFactory (via the ProtocolConfig owner) | Create vaults; set the keeper address | Touch deposits in a vault; change a vault's pair, width or shape |
 | DlmmVault (keeper or ProtocolConfig owner) | `rebalance`, only under the four conditions above | Swap, withdraw or move the vault's tokens anywhere but back into its own pair; block withdrawals |
-| DammHook, StockHook, DlmmPair, DlmmPositionNFT, Router | No owner | – |
+| DammHook, StockHook, DlmmPair, DlmmPositionNFT, Router, DlmmVaultZap | No owner | – |
 
 ## Safety guards
 
@@ -593,15 +629,17 @@ Every owned contract uses `Ownable2Step`. The owner address is listed under
 - **Composition fee** so an active-bin deposit plus withdrawal is never cheaper than a swap
   (covered by a fuzz test).
 - **Slippage bounds everywhere a user deposits or swaps:** `minAmountOut` and `deadline` on the
-  Router; active-bin slippage, minimum amounts and deadlines on DLMM positions.
+  Router; active-bin slippage, minimum amounts and deadlines on DLMM positions; `minShares` on vault
+  deposits; `minSwapOut`, `minShares` and `minOut` on the zap.
 - **Buyback price guard:** a reference that can only move over time, a ± 5 % band, a price limit on
   the swap itself and one buyback per block.
-- **Reentrancy guards** on the DLMM pair, the position NFT, the vaults, the FeeCollector and the Buyback.
+- **Reentrancy guards** on the DLMM pair, the position NFT, the vaults, the zap, the FeeCollector and the Buyback.
 
 ## Verification
 
-All 12 contracts above (9 protocol contracts, the seeded DLMM pair, the vault factory and the
-WETH / USDG vault) are verified on **Blockscout** and **Sourcify** from the sources in this repository. The source files in `src/` and
+All 13 contracts above (9 protocol contracts, the seeded DLMM pair, the vault factory, the
+WETH / USDG vault and the vault zap) are verified on **Blockscout** and **Sourcify** from the sources
+in this repository. The source files in `src/` and
 the pinned library versions under `lib/` are byte-identical to the verified sources.
 
 Compiler settings: solc 0.8.26, EVM `cancun`, `via_ir = true`, optimizer on with 44 444 444 runs,
@@ -610,7 +648,7 @@ is embedded in the bytecode, Blockscout labels the match "partial" and Sourcify 
 "full" / "exact match": that label only means the metadata hash cannot be compared.
 The compiled bytecode itself matches exactly.
 
-The vault contracts (`src/vaults`) were compiled with the same settings but 200 optimizer runs, the
+The vault contracts (`src/vaults`, including the zap) were compiled with the same settings but 200 optimizer runs, the
 `deploy` profile in `foundry.toml` (`FOUNDRY_PROFILE=deploy forge build`, output in `out-deploy/`).
 
 You can check it yourself. This compiles the repository and compares every contract's runtime
@@ -649,7 +687,9 @@ volatility decay, oracle band, market session and staleness), the Router (v4, DL
 multi-hop, quotes), the fee pipeline (conversion, oracle floors, every buyback price-guard case) and
 the vaults (first and proportional deposits, deposits at a pushed price, dust bins, withdrawals while
 paused, rebalance guards and token conservation, shapes, the share-inflation guard, and a fuzz test
-that a deposit and immediate withdrawal never returns more than was put in).
+that a deposit and immediate withdrawal never returns more than was put in) and the zap (one-token
+deposits in USDG and native ETH with ETH refunds, withdrawals to USDG and to native ETH, every guard,
+pulls only from the caller, and a fuzz test that the zap never keeps any tokens).
 
 Two suites fork mainnet: a stock pool against the real NVDA token and its Chainlink feed (latest
 block, public RPC by default, override with `ROBINHOOD_RPC_URL`), and the Router against live Pons
@@ -664,13 +704,15 @@ Deploy scripts (used for the mainnet deployment above):
 forge script script/Deploy.s.sol --rpc-url $ROBINHOOD_RPC_URL --broadcast   # + your signer flags
 forge script script/Seed.s.sol   --rpc-url $ROBINHOOD_RPC_URL --broadcast
 FOUNDRY_PROFILE=deploy KEEPER=<keeper> forge script script/DeployVaults.s.sol --rpc-url $ROBINHOOD_RPC_URL --broadcast
+FOUNDRY_PROFILE=deploy forge script script/DeployZap.s.sol --rpc-url $ROBINHOOD_RPC_URL --broadcast
 ```
 
 `Deploy.s.sol` deploys everything, registers ETH, WETH, USDG and the 35 stock tokens, and writes
 `deployments/robinhood.json`. The broadcaster becomes the owner. `Seed.s.sol` creates the launch pools.
 `DeployVaults.s.sol` deploys the vault factory at its CREATE2 address (and refuses to if the build
 would land anywhere but the address in `deployments/robinhood.json`), sets the keeper and opens the
-WETH / USDG vault.
+WETH / USDG vault. `DeployZap.s.sol` deploys the zap at its CREATE2 address the same way; the zap has no
+owner, so any account can run it.
 
 ## Repository layout
 
@@ -681,9 +723,9 @@ src/
   dlmm/          DlmmFactory, DlmmPair, DlmmPositionNFT
   libraries/     BinMath (bin prices, fee math), BinTree (next non-empty bin)
   periphery/     Router, PonsAdapter, FeeCollector, Buyback
-  vaults/        DlmmVaultFactory, DlmmVault
+  vaults/        DlmmVaultFactory, DlmmVault, DlmmVaultZap
   interfaces/    IRouter, IDlmmPair, IPonsCurve, IAggregatorV3
-script/          Deploy, Seed, DeployVaults, RobinhoodAddresses (every external address), check_bytecode.py
+script/          Deploy, Seed, DeployVaults, DeployZap, RobinhoodAddresses (every external address), check_bytecode.py
 deployments/     robinhood.json, the mainnet address manifest
 test/            dlmm/, hooks/, periphery/, vaults/ (unit and fork suites), e2e/ (local fork), utils/
 lib/             git submodules: forge-std v1.10.0, OpenZeppelin uniswap-hooks v1.1.0

@@ -21,7 +21,7 @@ jobs:
       - name: forge build
         run: forge build
 
-      - name: forge build (deploy profile, used for src/vaults)
+      - name: forge build (deploy profile: vaults, zap, BuybackV2)
         run: FOUNDRY_PROFILE=deploy forge build
 
       - name: forge test

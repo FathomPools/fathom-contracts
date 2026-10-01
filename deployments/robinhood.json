@@ -13,5 +13,6 @@
   "startBlock": 72268876,
   "stockHook": "0xa8122E55fbcb3F81cdC5418aeBd77351C0e568cC",
   "dlmmVaultFactory": "0x6FeBd590AB58EcfcB227047bACa183Fd948eAb18",
-  "dlmmVaultZap": "0x50855565aB1a3f860FCdBAaF87552357fF2d6f8A"
+  "dlmmVaultZap": "0x50855565aB1a3f860FCdBAaF87552357fF2d6f8A",
+  "buybackV2": "0xCe83cbF571efdFFbF0e67Cb9dA529679E05986Fa"
 }

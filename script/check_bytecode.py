@@ -5,7 +5,7 @@ Immutable values (constructor-set addresses and parameters) are written into the
 deploy time, so their byte ranges are masked on both sides before comparing.
 
     forge build
-    FOUNDRY_PROFILE=deploy forge build          # the vault contracts (200 optimizer runs)
+    FOUNDRY_PROFILE=deploy forge build          # vaults, zap and BuybackV2 (200 optimizer runs)
     python3 script/check_bytecode.py            # uses the public RPC
     ROBINHOOD_RPC_URL=<your rpc> python3 script/check_bytecode.py
 
@@ -37,6 +37,7 @@ DEPLOYED_200_RUNS = {
     "DlmmVaultFactory": "0x6FeBd590AB58EcfcB227047bACa183Fd948eAb18",
     "DlmmVault": "0x9DACCa4aAE3BC2f785e5D3F6302855c6042F7B66",  # WETH/USDG, 41 bins, Spot
     "DlmmVaultZap": "0x50855565aB1a3f860FCdBAaF87552357fF2d6f8A",
+    "BuybackV2": "0xCe83cbF571efdFFbF0e67Cb9dA529679E05986Fa",
 }
 
 

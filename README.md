@@ -58,7 +58,8 @@ burn the **$FATHOM** token.
   - [DlmmVaultZap](#dlmmvaultzap)
   - [Router and PonsAdapter](#router-and-ponsadapter)
   - [FeeCollector](#feecollector)
-  - [Buyback](#buyback)
+  - [BuybackV2](#buybackv2)
+  - [Buyback (v1, retired)](#buyback-v1-retired)
 - [Fees](#fees)
 - [Admin powers](#admin-powers)
 - [Safety guards](#safety-guards)
@@ -85,12 +86,13 @@ verified source (see [Verification](#verification)).
 | DlmmPositionNFT | [`0x916617697B1D782Ac59EE76378E86f7c2Ed3970D`](https://robinhoodchain.blockscout.com/address/0x916617697B1D782Ac59EE76378E86f7c2Ed3970D?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x916617697B1D782Ac59EE76378E86f7c2Ed3970D) | ERC-721 DLMM positions (`FTHM-DLMM`) |
 | Router | [`0x2303cC5a9CCdDBA50daf04aeece372Fd99813F8B`](https://robinhoodchain.blockscout.com/address/0x2303cC5a9CCdDBA50daf04aeece372Fd99813F8B?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x2303cC5a9CCdDBA50daf04aeece372Fd99813F8B) | Multi-hop swaps across every venue |
 | FeeCollector | [`0x51F34Ca37DD144a7709ee81c21AC7e850BC3A453`](https://robinhoodchain.blockscout.com/address/0x51F34Ca37DD144a7709ee81c21AC7e850BC3A453?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x51F34Ca37DD144a7709ee81c21AC7e850BC3A453) | Receives protocol fees, converts them to ETH |
-| Buyback | [`0x8b3d718843fd9167a52BDed64554131e39b4042F`](https://robinhoodchain.blockscout.com/address/0x8b3d718843fd9167a52BDed64554131e39b4042F?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x8b3d718843fd9167a52BDed64554131e39b4042F) | Buys $FATHOM with ETH and burns it |
+| Buyback | [`0x8b3d718843fd9167a52BDed64554131e39b4042F`](https://robinhoodchain.blockscout.com/address/0x8b3d718843fd9167a52BDed64554131e39b4042F?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x8b3d718843fd9167a52BDed64554131e39b4042F) | First buyback (v1), replaced by BuybackV2 |
+| BuybackV2 | [`0xCe83cbF571efdFFbF0e67Cb9dA529679E05986Fa`](https://robinhoodchain.blockscout.com/address/0xCe83cbF571efdFFbF0e67Cb9dA529679E05986Fa?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0xCe83cbF571efdFFbF0e67Cb9dA529679E05986Fa) | Buys $FATHOM with ETH and burns it; receives the fee ETH |
 | DlmmVaultFactory | [`0x6FeBd590AB58EcfcB227047bACa183Fd948eAb18`](https://robinhoodchain.blockscout.com/address/0x6FeBd590AB58EcfcB227047bACa183Fd948eAb18?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x6FeBd590AB58EcfcB227047bACa183Fd948eAb18) | Creates DLMM vaults, names the keeper |
 | DlmmVault (WETH / USDG) | [`0x9DACCa4aAE3BC2f785e5D3F6302855c6042F7B66`](https://robinhoodchain.blockscout.com/address/0x9DACCa4aAE3BC2f785e5D3F6302855c6042F7B66?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x9DACCa4aAE3BC2f785e5D3F6302855c6042F7B66) | Auto-rebalancing vault on the WETH / USDG DLMM pair (`fvWETH-USDG`) |
 | DlmmVaultZap | [`0x50855565aB1a3f860FCdBAaF87552357fF2d6f8A`](https://robinhoodchain.blockscout.com/address/0x50855565aB1a3f860FCdBAaF87552357fF2d6f8A?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x50855565aB1a3f860FCdBAaF87552357fF2d6f8A) | One-token deposits into and withdrawals out of the vaults |
 
-Owner of every owned contract (`ProtocolConfig`, `AssetRegistry`, `FeeCollector`, `Buyback`):
+Owner of every owned contract (`ProtocolConfig`, `AssetRegistry`, `FeeCollector`, `Buyback`, `BuybackV2`):
 [`0x29A99360467CEB0D726450A09337b19A9D2ac5b7`](https://robinhoodchain.blockscout.com/address/0x29A99360467CEB0D726450A09337b19A9D2ac5b7), the deployer.
 Ownership uses `Ownable2Step`, so a transfer only completes when the new owner accepts it. The vault
 factory has no owner of its own: it follows the `ProtocolConfig` owner.
@@ -99,7 +101,9 @@ The vault contracts were deployed later than the rest (block 76 785 672) by
 [`script/DeployVaults.s.sol`](script/DeployVaults.s.sol). The vault keeper is
 [`0xD5eBe812E36f7C6eC0b1A802fBefC294954bFD38`](https://robinhoodchain.blockscout.com/address/0xD5eBe812E36f7C6eC0b1A802fBefC294954bFD38),
 an automated account that only calls `rebalance`. The zap was deployed at block 76 834 101 by
-[`script/DeployZap.s.sol`](script/DeployZap.s.sol).
+[`script/DeployZap.s.sol`](script/DeployZap.s.sol). BuybackV2 was deployed at block 77 468 055 by
+[`script/DeployBuybackV2.s.sol`](script/DeployBuybackV2.s.sol), which in the same run configured it on the
+$FATHOM pool, pointed the FeeCollector at it and added the WETH fee route.
 
 ### Launch pools
 
@@ -168,7 +172,7 @@ flowchart LR
 ```mermaid
 flowchart LR
     V[DAMM pools<br/>Stock pools<br/>DLMM pairs] -->|20 % of each swap fee| FC[FeeCollector]
-    FC -->|convert: fee token to ETH<br/>via the Router| B[Buyback]
+    FC -->|convert: fee token to ETH<br/>via the Router| B[BuybackV2]
     B -->|buyback: ETH to $FATHOM<br/>in its v4 pool| X((0xdead))
 ```
 
@@ -177,10 +181,10 @@ flowchart LR
 2. Each venue charges its fee on the swap input. The LP part stays in the pool. The protocol part
    (`ProtocolConfig.protocolFeeShareBps`, 20 % of the fee) goes straight to the **FeeCollector**.
 3. Anyone can call `FeeCollector.convert(token)`. It swaps collected fees to ETH through the Router
-   with an oracle-bounded minimum, and the ETH goes straight to the **Buyback**.
-4. Anyone can call `Buyback.buyback()` once per block. It spends a capped amount of ETH on $FATHOM
-   in its ETH pool, inside a price band, and every token bought goes from the PoolManager straight
-   to `0xdead`.
+   with an oracle-bounded minimum, and the ETH goes straight to the **BuybackV2**.
+4. Anyone can call `BuybackV2.buyback()` once per block, optionally adding ETH of their own. It
+   spends a capped amount of ETH on $FATHOM in its ETH pool, guarded against buying into a pump, and
+   every token bought goes from the PoolManager straight to `0xdead`.
 
 ## The contracts
 
@@ -552,35 +556,60 @@ Receives the protocol share of fees from every venue, in whatever token they wer
   output comes from `AssetRegistry` prices minus `maxSlippageBps` (3 %, at most 20 %), and the call
   reverts if either price is stale. Caps per call keep each conversion small relative to pool depth.
 - `forwardEth()` is permissionless and sends ETH fees held by the collector to the Buyback.
+- Routes on mainnet: USDG goes to ETH in the public ETH / USDG v4 pool, with the oracle floor. WETH
+  goes to USDG on the WETH / USDG DLMM pair, then the same v4 hop, also with the oracle floor (a
+  Router route cannot start with a bare WETH unwrap).
 - `sweep` lets the owner recover a token only if it has **no** conversion route (stray or
   unsupported tokens). Tokens with a route can only leave through `convert`, into the Buyback.
 
-### Buyback
+### BuybackV2
 
-[`src/periphery/Buyback.sol`](src/periphery/Buyback.sol)
+[`src/periphery/BuybackV2.sol`](src/periphery/BuybackV2.sol)
 
-Turns the ETH from fees into $FATHOM buy pressure and burns what it buys.
+Turns the ETH from fees into $FATHOM buy pressure and burns what it buys. It replaced the first
+Buyback on 2026-10-01 (why: see [the next section](#buyback-v1-retired)); the FeeCollector sends its
+ETH here.
 
 - `configure(poolKey, hookData)` is a one-shot owner call that sets the ETH / $FATHOM Uniswap v4
-  pool (native ETH as `currency0`, typically the token's Pons graduated pool). Until it is called,
-  `buyback()` reverts `NotConfigured` and ETH simply accumulates in the contract.
-- `buyback()` is **permissionless** and runs at most once per block. It spends up to
-  `maxEthPerCall` (currently 0.05 ETH) minus a caller reward, and the tokens it buys go directly from
-  the PoolManager to `0xdead`; nothing is held by the contract. The caller receives
-  `callerRewardBps` (0.5 %, at most 5 %) of the ETH spent.
+  pool (native ETH as `currency0`; the $FATHOM Pons graduated pool). Until it is called,
+  `buyback()` reverts `NotConfigured`.
+- `buyback()` is **permissionless** and **payable**, and runs at most once per block. It spends up to
+  `maxEthPerCall` (currently 0.05 ETH) of the ETH it holds, minus a caller reward. Anyone can send
+  ETH of their own with the call, any amount, and it is spent in the same buyback. That ETH is
+  emitted as `Received(sender, amount)`, so ETH from fees (sent by the Router or the FeeCollector)
+  and ETH added by callers stay distinguishable on chain. A call that reverts returns the ETH sent
+  with it.
+- The tokens bought go directly from the PoolManager to `0xdead`; nothing is held by the contract.
+  The caller receives `callerRewardBps` (0.5 %, at most 5 %) of the ETH spent, never more than was
+  set aside for it.
 
 **Price guard.** $FATHOM has no Chainlink feed, so the guard is derived from the pool itself:
 
-- A reference price is set on `configure`. It follows the pool price, but it can move by at most
-  `driftBpsPerHour` (10 % per hour) of elapsed time and at most `maxDeviationBps` per update. With no
-  time elapsed it does not move at all, so a price pump inside one block cannot shift it.
-- `buyback()` reverts if the pool price is more than `maxDeviationBps` (5 %) away from the reference,
-  and the swap itself stops at the edge of that band. A buyback therefore never pays more than
-  reference + 5 %, and a front-running pump just makes it revert. Unspent ETH stays for the next call.
-- Anyone can call `poke()` to move the reference toward the pool price by the drift accrued so far,
-  so buybacks resume on their own after a genuine repricing. The owner can also `resetReference()`.
+- A reference price follows the pool price, but it can move by at most `driftBpsPerHour` (30 % per
+  hour) of elapsed time and at most `maxDeviationBps` (10 %) per update. With no time elapsed it does
+  not move at all, so a pump inside one block cannot shift it. Every `buyback()` catches the
+  reference up first, and anyone can do the same with `poke()`.
+- Only a price that is too high can hurt a buyer, so only that side is guarded: `buyback()` reverts
+  `PriceAboveBand` if $FATHOM is more than `maxDeviationBps` above the reference (a front-running
+  pump). A lower price never blocks a buyback, however old the reference is.
+- The swap stops at the tighter of two limits: the edge of the reference band, and
+  `maxDeviationBps` above the price the swap started from. One call never pays more than either.
+  Unspent ETH stays for the next call.
+- The owner can retune the guard and `resetReference()` after a large genuine repricing.
 
-Running totals: `totalEthSpent` and `totalBurned`. Event: `BoughtBack`.
+Running totals: `totalEthSpent` and `totalBurned`. Event: `BoughtBack`, the same as v1.
+
+### Buyback (v1, retired)
+
+[`src/periphery/Buyback.sol`](src/periphery/Buyback.sol)
+
+The first buyback, kept in the repository because it is deployed and verified. Its price guard
+was two-sided, and its reference moved only inside a successful `buyback()` or a `poke()`. After
+$FATHOM fell about 21 % while nobody touched the reference, the reference sat far above the
+market, and every `buyback()` reverted `PriceOutOfRange` until the reference was poked back in 10 %
+steps. BuybackV2 removes that failure mode: a lower price never blocks it and every call catches the
+reference up. v1 also lacks the cap on the caller reward, so a call that spends the whole balance
+can revert on a 1 wei rounding difference. The FeeCollector no longer sends ETH to v1.
 
 ## Fees
 
@@ -593,10 +622,10 @@ Running totals: `totalEthSpent` and `totalBurned`. Event: `BoughtBack`.
 | DLMM vault | none (the vault earns the pair's LP fees for its holders) | – | – |
 | Vault zap | none (the swap part pays the fee of the pools it routes through) | – | – |
 | Router | none | – | – |
-| `Buyback.buyback()` caller | 0.5 % of the ETH spent, paid to the caller | – | – |
+| `BuybackV2.buyback()` caller | 0.5 % of the ETH spent, paid to the caller | – | – |
 
 The protocol share is `ProtocolConfig.protocolFeeShareBps` (2 000 = 20 % of the fee, capped at 50 %
-by the contract). All of it flows FeeCollector → ETH → Buyback → burned $FATHOM.
+by the contract). All of it flows FeeCollector → ETH → BuybackV2 → burned $FATHOM.
 
 ## Admin powers
 
@@ -609,7 +638,7 @@ Every owned contract uses `Ownable2Step`. The owner address is listed under
 | AssetRegistry | Add, update and disable stock assets and quotes; set their fees (≤ 10 %) and bands; set the market session and holidays | Change a pool's LP positions. Disabling an asset stops swaps in its stock pools; LPs can still withdraw |
 | DlmmFactory (via the ProtocolConfig owner) | Enable, disable or change bin-step presets | Change the fee parameters of an existing pair |
 | FeeCollector | Set conversion routes, caps and slippage; change the Buyback address; recover tokens that have **no** route | Take tokens that have a route |
-| Buyback | Configure the pool once; tune the price guard (deviation ≤ 20 %, drift ≤ 100 %/h); reset the reference; set `maxEthPerCall` and the caller reward (≤ 5 %) | Withdraw ETH or tokens; point the buyback at a second pool |
+| Buyback, BuybackV2 | Configure the pool once; tune the price guard (deviation ≤ 20 %, drift ≤ 100 %/h); reset the reference; set `maxEthPerCall` and the caller reward (≤ 5 %) | Withdraw ETH or tokens; point the buyback at a second pool |
 | DlmmVaultFactory (via the ProtocolConfig owner) | Create vaults; set the keeper address | Touch deposits in a vault; change a vault's pair, width or shape |
 | DlmmVault (keeper or ProtocolConfig owner) | `rebalance`, only under the four conditions above | Swap, withdraw or move the vault's tokens anywhere but back into its own pair; block withdrawals |
 | DammHook, StockHook, DlmmPair, DlmmPositionNFT, Router, DlmmVaultZap | No owner | – |
@@ -631,14 +660,14 @@ Every owned contract uses `Ownable2Step`. The owner address is listed under
 - **Slippage bounds everywhere a user deposits or swaps:** `minAmountOut` and `deadline` on the
   Router; active-bin slippage, minimum amounts and deadlines on DLMM positions; `minShares` on vault
   deposits; `minSwapOut`, `minShares` and `minOut` on the zap.
-- **Buyback price guard:** a reference that can only move over time, a ± 5 % band, a price limit on
-  the swap itself and one buyback per block.
-- **Reentrancy guards** on the DLMM pair, the position NFT, the vaults, the zap, the FeeCollector and the Buyback.
+- **Buyback price guard:** a reference that can only move over time, a 10 % band above it (a lower
+  price never blocks a buyback), a price limit on the swap itself and one buyback per block.
+- **Reentrancy guards** on the DLMM pair, the position NFT, the vaults, the zap, the FeeCollector and both buybacks.
 
 ## Verification
 
-All 13 contracts above (9 protocol contracts, the seeded DLMM pair, the vault factory, the
-WETH / USDG vault and the vault zap) are verified on **Blockscout** and **Sourcify** from the sources
+All 14 contracts above (9 protocol contracts, the seeded DLMM pair, the vault factory, the
+WETH / USDG vault, the vault zap and BuybackV2) are verified on **Blockscout** and **Sourcify** from the sources
 in this repository. The source files in `src/` and
 the pinned library versions under `lib/` are byte-identical to the verified sources.
 
@@ -648,7 +677,7 @@ is embedded in the bytecode, Blockscout labels the match "partial" and Sourcify 
 "full" / "exact match": that label only means the metadata hash cannot be compared.
 The compiled bytecode itself matches exactly.
 
-The vault contracts (`src/vaults`, including the zap) were compiled with the same settings but 200 optimizer runs, the
+The vault contracts (`src/vaults`, including the zap) and BuybackV2 were compiled with the same settings but 200 optimizer runs, the
 `deploy` profile in `foundry.toml` (`FOUNDRY_PROFILE=deploy forge build`, output in `out-deploy/`).
 
 You can check it yourself. This compiles the repository and compares every contract's runtime
@@ -689,11 +718,15 @@ the vaults (first and proportional deposits, deposits at a pushed price, dust bi
 paused, rebalance guards and token conservation, shapes, the share-inflation guard, and a fuzz test
 that a deposit and immediate withdrawal never returns more than was put in) and the zap (one-token
 deposits in USDG and native ETH with ETH refunds, withdrawals to USDG and to native ETH, every guard,
-pulls only from the caller, and a fuzz test that the zap never keeps any tokens).
+pulls only from the caller, and a fuzz test that the zap never keeps any tokens) and BuybackV2 (the
+stale-reference case that stopped v1, a cheaper token never blocking, front-run pumps reverting and
+refunding the caller, catching up after idle time in one call, the per-call impact cap, and a fuzz
+test that anyone can burn any amount of their own ETH).
 
-Two suites fork mainnet: a stock pool against the real NVDA token and its Chainlink feed (latest
-block, public RPC by default, override with `ROBINHOOD_RPC_URL`), and the Router against live Pons
-curves and graduated pools. The Pons suite pins block 71 377 700, so it needs an archive endpoint in
+Three suites fork mainnet: a stock pool against the real NVDA token and its Chainlink feed (latest
+block, public RPC by default, override with `ROBINHOOD_RPC_URL`), BuybackV2 on the live $FATHOM pool
+(latest block, override with `FORK_RPC`: the FeeCollector's WETH fees, topped up when they are dust,
+converted through the WETH route and burned, and a 1 gwei buyback), and the Router against live Pons curves and graduated pools. The Pons suite pins block 71 377 700, so it needs an archive endpoint in
 `PONS_FORK_RPC`; the public RPC prunes historical state, which is why CI skips that one suite. The end-to-end suites in `test/e2e` run only when
 `E2E_RPC_URL` points at a local anvil fork where the deploy scripts have been run (see the comments
 at the top of those files).
@@ -705,6 +738,7 @@ forge script script/Deploy.s.sol --rpc-url $ROBINHOOD_RPC_URL --broadcast   # + 
 forge script script/Seed.s.sol   --rpc-url $ROBINHOOD_RPC_URL --broadcast
 FOUNDRY_PROFILE=deploy KEEPER=<keeper> forge script script/DeployVaults.s.sol --rpc-url $ROBINHOOD_RPC_URL --broadcast
 FOUNDRY_PROFILE=deploy forge script script/DeployZap.s.sol --rpc-url $ROBINHOOD_RPC_URL --broadcast
+FOUNDRY_PROFILE=deploy forge script script/DeployBuybackV2.s.sol --rpc-url $ROBINHOOD_RPC_URL --broadcast
 ```
 
 `Deploy.s.sol` deploys everything, registers ETH, WETH, USDG and the 35 stock tokens, and writes
@@ -712,7 +746,8 @@ FOUNDRY_PROFILE=deploy forge script script/DeployZap.s.sol --rpc-url $ROBINHOOD_
 `DeployVaults.s.sol` deploys the vault factory at its CREATE2 address (and refuses to if the build
 would land anywhere but the address in `deployments/robinhood.json`), sets the keeper and opens the
 WETH / USDG vault. `DeployZap.s.sol` deploys the zap at its CREATE2 address the same way; the zap has no
-owner, so any account can run it.
+owner, so any account can run it. `DeployBuybackV2.s.sol` deploys BuybackV2 at its CREATE2 address the same
+way and, run by the owner, configures it, points the FeeCollector at it and adds the WETH fee route.
 
 ## Repository layout
 
@@ -722,10 +757,10 @@ src/
   hooks/         FathomHookBase, DammHook, StockHook, HookDeployer (CREATE2 salt mining)
   dlmm/          DlmmFactory, DlmmPair, DlmmPositionNFT
   libraries/     BinMath (bin prices, fee math), BinTree (next non-empty bin)
-  periphery/     Router, PonsAdapter, FeeCollector, Buyback
+  periphery/     Router, PonsAdapter, FeeCollector, Buyback, BuybackV2
   vaults/        DlmmVaultFactory, DlmmVault, DlmmVaultZap
   interfaces/    IRouter, IDlmmPair, IPonsCurve, IAggregatorV3
-script/          Deploy, Seed, DeployVaults, DeployZap, RobinhoodAddresses (every external address), check_bytecode.py
+script/          Deploy, Seed, DeployVaults, DeployZap, DeployBuybackV2, RobinhoodAddresses (every external address), check_bytecode.py
 deployments/     robinhood.json, the mainnet address manifest
 test/            dlmm/, hooks/, periphery/, vaults/ (unit and fork suites), e2e/ (local fork), utils/
 lib/             git submodules: forge-std v1.10.0, OpenZeppelin uniswap-hooks v1.1.0

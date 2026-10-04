@@ -31,6 +31,9 @@ and one router across all of them:
 - **Limit orders**: an order is liquidity in one DLMM bin on the far side of the price. It fills at
   exactly that bin's price, earns the pair's swap fees while it fills, and is settled once the price
   has crossed the bin.
+- **Launch pools**: one transaction creates a fixed-supply token, opens its DAMM pool at a chosen
+  price and seeds part of the supply into it as liquidity that is locked for good. An optional
+  pre-launch vault pools ETH first and buys at launch in a single swap, one price for every depositor.
 - **Router**: one exact-input, multi-hop router across all three venues, any other Uniswap v4 pool
   and Pons bonding curves.
 
@@ -60,6 +63,7 @@ burn the **$FATHOM** token.
   - [DlmmVault](#dlmmvault)
   - [DlmmVaultZap](#dlmmvaultzap)
   - [DlmmLimitOrders](#dlmmlimitorders)
+  - [LaunchPools, LaunchToken and LaunchVault](#launchpools-launchtoken-and-launchvault)
   - [Router and PonsAdapter](#router-and-ponsadapter)
   - [FeeCollector](#feecollector)
   - [BuybackV2](#buybackv2)
@@ -96,6 +100,8 @@ verified source (see [Verification](#verification)).
 | DlmmVault (WETH / USDG) | [`0x9DACCa4aAE3BC2f785e5D3F6302855c6042F7B66`](https://robinhoodchain.blockscout.com/address/0x9DACCa4aAE3BC2f785e5D3F6302855c6042F7B66?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x9DACCa4aAE3BC2f785e5D3F6302855c6042F7B66) | Auto-rebalancing vault on the WETH / USDG DLMM pair (`fvWETH-USDG`) |
 | DlmmVaultZap | [`0x50855565aB1a3f860FCdBAaF87552357fF2d6f8A`](https://robinhoodchain.blockscout.com/address/0x50855565aB1a3f860FCdBAaF87552357fF2d6f8A?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x50855565aB1a3f860FCdBAaF87552357fF2d6f8A) | One-token deposits into and withdrawals out of the vaults |
 | DlmmLimitOrders | [`0xDA1eB9B0810bbE361Fd692513D12B644d55B7C28`](https://robinhoodchain.blockscout.com/address/0xDA1eB9B0810bbE361Fd692513D12B644d55B7C28?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0xDA1eB9B0810bbE361Fd692513D12B644d55B7C28) | Limit orders on the DLMM pairs |
+| LaunchPools | [`0x8323Ad9C32b8AE33feeFE1D18846c0cd61284EBf`](https://robinhoodchain.blockscout.com/address/0x8323Ad9C32b8AE33feeFE1D18846c0cd61284EBf?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0x8323Ad9C32b8AE33feeFE1D18846c0cd61284EBf) | One-transaction token launches into locked DAMM pools |
+| LaunchVault | [`0xa3c68aA67C410C25235414A978A5ebff77F19Cb4`](https://robinhoodchain.blockscout.com/address/0xa3c68aA67C410C25235414A978A5ebff77F19Cb4?tab=contract) | [Sourcify](https://repo.sourcify.dev/4663/0xa3c68aA67C410C25235414A978A5ebff77F19Cb4) | Pre-launch ETH vaults that buy at launch in one swap |
 
 Owner of every owned contract (`ProtocolConfig`, `AssetRegistry`, `FeeCollector`, `Buyback`, `BuybackV2`):
 [`0x29A99360467CEB0D726450A09337b19A9D2ac5b7`](https://robinhoodchain.blockscout.com/address/0x29A99360467CEB0D726450A09337b19A9D2ac5b7), the deployer.
@@ -111,7 +117,8 @@ an automated account that calls `rebalance` on the vaults and settles filled lim
 [`script/DeployBuybackV2.s.sol`](script/DeployBuybackV2.s.sol), which in the same run configured it on the
 $FATHOM pool, pointed the FeeCollector at it and added the WETH fee route. DlmmLimitOrders was
 deployed at block 78 453 033 by [`script/DeployLimitOrders.s.sol`](script/DeployLimitOrders.s.sol); it has
-no owner and needs no setup.
+no owner and needs no setup. LaunchPools and LaunchVault were deployed at block 80 027 164 by
+[`script/DeployLaunchPools.s.sol`](script/DeployLaunchPools.s.sol); neither has an owner.
 
 ### Launch pools
 
@@ -544,6 +551,53 @@ fills.
 Views: `ordersOf(owner)`, `orderInfo(pair, id, epoch, owner)`, `getBatch`, `openBooks()`,
 `readyBooks()`. Events: `OrderPlaced`, `OrderCancelled`, `BatchExecuted`, `OrderClaimed`.
 
+### LaunchPools, LaunchToken and LaunchVault
+
+[`src/launch/LaunchPools.sol`](src/launch/LaunchPools.sol),
+[`src/launch/LaunchToken.sol`](src/launch/LaunchToken.sol),
+[`src/launch/LaunchVault.sol`](src/launch/LaunchVault.sol)
+
+One-transaction token launches on DAMM pools. `LaunchPools.launch(params)`:
+
+- deploys a **LaunchToken**: a plain fixed-supply ERC-20 with the whole supply minted once. It has no
+  owner, no further minting, no fee or limit on transfers and treats no address differently. It is
+  deployed with CREATE2 under a salt of (caller, launch count, block number), so its address and its
+  pool id are not known before the launch's block and nobody can initialize the pool ahead of it (a
+  same-block front-run reverts `LaunchPools__PoolTaken`, and the launch works from the next block);
+- creates the native-ETH / token DAMM pool through `DammHook.createPool` at `startTick` (tick spacing
+  60, so the price is tokens per ETH) and seeds `seedAmount` of the supply as one range from the
+  lowest usable tick up to `startTick`. At the start price it holds only the token, and it sells the
+  token to buyers at every higher price;
+- sends the rest of the supply to `creator`;
+- optionally buys with the ETH sent along, as the pool's first swap in the same unlock, so nobody can
+  trade ahead of it.
+
+Every launch must use the DAMM anti-snipe window (`snipeSeconds` > 0, start fee above the base fee):
+from the first block the fee starts at `snipeStartFeeBps` and decays to the base fee, with the
+volatility surcharge on top. The hook takes its protocol share as on any DAMM pool.
+
+**The launch position** is held by LaunchPools in the PoolManager and is **locked for good**: the
+contract adds that liquidity once and has no function that removes it, no owner and no upgrade path.
+Its fees belong to the launch's `feeRecipient` (the creator at launch). `collectFees(poolId)` is
+permissionless and pays both currencies straight to the fee recipient, also while the protocol is
+paused; only the current fee recipient can hand the right on (`setFeeRecipient`). For a buy at
+launch the launch position is the only liquidity, so the LP share of the start fee is paid back to
+the buyer with the tokens; only the protocol share stays charged.
+
+**LaunchVault** pools ETH before a token exists:
+
+- `open(params, depositEnd)` checks the launch parameters with `LaunchPools.preview` and stores them;
+  nothing can change them afterwards. Deposits stay open until `depositEnd`, at most 7 days ahead.
+- Until then anyone can `deposit` ETH and `withdraw` any part of their own deposit.
+- From `depositEnd` and for 3 days anyone can call `launch(id)`: the vault's whole balance buys the
+  token as the pool's first swap, so every depositor pays the same average price.
+- `claim(id)` pays each depositor their pro-rata share of the tokens bought and of the ETH paid back
+  (rounded down; at most a few wei stay in the vault). If nobody launched in time, `refund(id)` returns
+  every deposit in full.
+- No owner and no fee.
+
+Views: `preview`, `poolKeyOf`, `getLaunch`, `launchCount`, `pendingFees`; on the vault `claimable`.
+
 ### Router and PonsAdapter
 
 [`src/periphery/Router.sol`](src/periphery/Router.sol),
@@ -663,6 +717,8 @@ can revert on a 1 wei rounding difference. The FeeCollector no longer sends ETH 
 | DLMM vault | none (the vault earns the pair's LP fees for its holders) | – | – |
 | Vault zap | none (the swap part pays the fee of the pools it routes through) | – | – |
 | Limit order | none (the order is liquidity in the pair and earns its LP fees while it fills) | – | – |
+| Launch pool | the DAMM pool's fees, with a mandatory anti-snipe window; the launch position's LP share goes to the creator | 80 % | 20 % |
+| Launch vault | none (its one buy pays the pool's protocol share of the start fee; the LP share is paid back) | – | – |
 | Router | none | – | – |
 | `BuybackV2.buyback()` caller | 0.5 % of the ETH spent, paid to the caller | – | – |
 
@@ -683,7 +739,7 @@ Every owned contract uses `Ownable2Step`. The owner address is listed under
 | Buyback, BuybackV2 | Configure the pool once; tune the price guard (deviation ≤ 20 %, drift ≤ 100 %/h); reset the reference; set `maxEthPerCall` and the caller reward (≤ 5 %) | Withdraw ETH or tokens; point the buyback at a second pool |
 | DlmmVaultFactory (via the ProtocolConfig owner) | Create vaults; set the keeper address | Touch deposits in a vault; change a vault's pair, width or shape |
 | DlmmVault (keeper or ProtocolConfig owner) | `rebalance`, only under the four conditions above | Swap, withdraw or move the vault's tokens anywhere but back into its own pair; block withdrawals |
-| DammHook, StockHook, DlmmPair, DlmmPositionNFT, Router, DlmmVaultZap, DlmmLimitOrders | No owner | – |
+| DammHook, StockHook, DlmmPair, DlmmPositionNFT, Router, DlmmVaultZap, DlmmLimitOrders, LaunchPools, LaunchToken, LaunchVault | No owner | – |
 
 ## Safety guards
 
@@ -705,12 +761,14 @@ Every owned contract uses `Ownable2Step`. The owner address is listed under
   deposits; `minSwapOut`, `minShares` and `minOut` on the zap.
 - **Buyback price guard:** a reference that can only move over time, a 10 % band above it (a lower
   price never blocks a buyback), a price limit on the swap itself and one buyback per block.
-- **Reentrancy guards** on the DLMM pair, the position NFT, the vaults, the zap, the limit orders, the FeeCollector and both buybacks.
+- **Locked launch liquidity:** LaunchPools has no function that removes a launch position, and launch
+  tokens cannot be front-run into a pool before their launch block.
+- **Reentrancy guards** on the DLMM pair, the position NFT, the vaults, the zap, the limit orders, the launch contracts, the FeeCollector and both buybacks.
 
 ## Verification
 
-All 15 contracts above (9 protocol contracts, the seeded DLMM pair, the vault factory, the
-WETH / USDG vault, the vault zap, BuybackV2 and DlmmLimitOrders) are verified on **Blockscout** and **Sourcify** from the sources
+All 17 contracts above (9 protocol contracts, the seeded DLMM pair, the vault factory, the
+WETH / USDG vault, the vault zap, BuybackV2, DlmmLimitOrders, LaunchPools and LaunchVault) are verified on **Blockscout** and **Sourcify** from the sources
 in this repository. The source files in `src/` and
 the pinned library versions under `lib/` are byte-identical to the verified sources.
 
@@ -720,7 +778,7 @@ is embedded in the bytecode, Blockscout labels the match "partial" and Sourcify 
 "full" / "exact match": that label only means the metadata hash cannot be compared.
 The compiled bytecode itself matches exactly.
 
-The vault contracts (`src/vaults`, including the zap), BuybackV2 and DlmmLimitOrders were compiled with the same settings but 200 optimizer runs, the
+The vault contracts (`src/vaults`, including the zap), BuybackV2, DlmmLimitOrders and the launch contracts (`src/launch`) were compiled with the same settings but 200 optimizer runs, the
 `deploy` profile in `foundry.toml` (`FOUNDRY_PROFILE=deploy forge build`, output in `out-deploy/`).
 
 You can check it yourself. This compiles the repository and compares every contract's runtime
@@ -767,14 +825,20 @@ refunding the caller, catching up after idle time in one call, the per-call impa
 test that anyone can burn any amount of their own ETH) and the limit orders (sells and buys that fill
 at the bin price plus fees, pro-rata batches, cancels before and during a fill, a round trip that
 nobody executed, settling a crossed batch from the other side, native ETH in and out, pause, the
-keeper entry, and a fuzz test that claims never exceed what a batch received).
+keeper entry, and a fuzz test that claims never exceed what a batch received) and the launch
+contracts (the token, pool and seed in one call, every parameter check, the anti-snipe window, a buy
+at launch with the LP share paid back, locked liquidity, fee collection and hand-over, the same-block
+front-run guard, the vault's deposits, withdrawals, one-swap launch, pro-rata claims and refunds, and
+fuzz tests that a launch with a buy conserves supply and ETH, that a buy-and-sell round trip never
+profits, and on the vault's claim rounding).
 
-Four suites fork mainnet: a stock pool against the real NVDA token and its Chainlink feed (latest
+Five suites fork mainnet: a stock pool against the real NVDA token and its Chainlink feed (latest
 block, public RPC by default, override with `ROBINHOOD_RPC_URL`), BuybackV2 on the live $FATHOM pool
 (latest block, override with `FORK_RPC`: the FeeCollector's WETH fees, topped up when they are dust,
 converted through the WETH route and burned, and a 1 gwei buyback), DlmmLimitOrders on the live
 WETH / USDG pair (latest block, `FORK_RPC`: a native-ETH sell and a USDG buy filled by real swaps,
-executed and claimed), and the Router against live Pons curves and graduated pools. The Pons suite pins block 71 377 700, so it needs an archive endpoint in
+executed and claimed), the launch contracts against the live PoolManager and DammHook (latest
+block, `FORK_RPC`), and the Router against live Pons curves and graduated pools. The Pons suite pins block 71 377 700, so it needs an archive endpoint in
 `PONS_FORK_RPC`; the public RPC prunes historical state, which is why CI skips that one suite. The end-to-end suites in `test/e2e` run only when
 `E2E_RPC_URL` points at a local anvil fork where the deploy scripts have been run (see the comments
 at the top of those files).
@@ -788,6 +852,7 @@ FOUNDRY_PROFILE=deploy KEEPER=<keeper> forge script script/DeployVaults.s.sol --
 FOUNDRY_PROFILE=deploy forge script script/DeployZap.s.sol --rpc-url $ROBINHOOD_RPC_URL --broadcast
 FOUNDRY_PROFILE=deploy forge script script/DeployBuybackV2.s.sol --rpc-url $ROBINHOOD_RPC_URL --broadcast
 FOUNDRY_PROFILE=deploy forge script script/DeployLimitOrders.s.sol --rpc-url $ROBINHOOD_RPC_URL --broadcast
+FOUNDRY_PROFILE=deploy forge script script/DeployLaunchPools.s.sol --rpc-url $ROBINHOOD_RPC_URL --broadcast
 ```
 
 `Deploy.s.sol` deploys everything, registers ETH, WETH, USDG and the 35 stock tokens, and writes
@@ -798,7 +863,8 @@ WETH / USDG vault. `DeployZap.s.sol` deploys the zap at its CREATE2 address the 
 owner, so any account can run it. `DeployBuybackV2.s.sol` deploys BuybackV2 at its CREATE2 address the same
 way and, run by the owner, configures it, points the FeeCollector at it and adds the WETH fee route.
 `DeployLimitOrders.s.sol` deploys DlmmLimitOrders at its CREATE2 address the same way; it has no owner
-and no setup, so any account can run it.
+and no setup, so any account can run it. `DeployLaunchPools.s.sol` deploys LaunchPools and LaunchVault at
+their CREATE2 addresses the same way; neither has an owner.
 
 ## Repository layout
 
@@ -810,10 +876,11 @@ src/
   libraries/     BinMath (bin prices, fee math), BinTree (next non-empty bin)
   periphery/     Router, PonsAdapter, FeeCollector, Buyback, BuybackV2, DlmmLimitOrders
   vaults/        DlmmVaultFactory, DlmmVault, DlmmVaultZap
+  launch/        LaunchPools, LaunchToken, LaunchVault
   interfaces/    IRouter, IDlmmPair, IPonsCurve, IAggregatorV3
-script/          Deploy, Seed, DeployVaults, DeployZap, DeployBuybackV2, DeployLimitOrders, RobinhoodAddresses (every external address), check_bytecode.py
+script/          Deploy, Seed, DeployVaults, DeployZap, DeployBuybackV2, DeployLimitOrders, DeployLaunchPools, RobinhoodAddresses (every external address), check_bytecode.py
 deployments/     robinhood.json, the mainnet address manifest
-test/            dlmm/, hooks/, periphery/, vaults/ (unit and fork suites), e2e/ (local fork), utils/
+test/            dlmm/, hooks/, periphery/, vaults/, launch/ (unit and fork suites), e2e/ (local fork), utils/
 lib/             git submodules: forge-std v1.10.0, OpenZeppelin uniswap-hooks v1.1.0
                  (brings Uniswap v4-core, v4-periphery and OpenZeppelin Contracts 5.0)
 ```

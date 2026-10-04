@@ -27,7 +27,7 @@ fail_on_revert = true
 [rpc_endpoints]
 robinhood = "${ROBINHOOD_RPC_URL}"
 
-# The vaults, the zap, BuybackV2 and DlmmLimitOrders were deployed from this profile: same settings,
+# The vaults, the zap, BuybackV2, DlmmLimitOrders and the launch contracts were deployed from this profile: same settings,
 # 200 optimizer runs.
 # FOUNDRY_PROFILE=deploy forge build
 [profile.deploy]
